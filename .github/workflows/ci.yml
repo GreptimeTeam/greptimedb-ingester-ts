@@ -33,17 +33,6 @@ jobs:
   integration:
     if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-integration')
     runs-on: ubuntu-latest
-    services:
-      greptimedb:
-        image: greptime/greptimedb:latest
-        ports:
-          - 4000:4000
-          - 4001:4001
-        options: >-
-          --health-cmd "curl -fsS http://127.0.0.1:4000/health || exit 1"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 30
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -54,6 +43,37 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # GitHub `services:` cannot override the image's CMD, but the upstream
+      # `greptime/greptimedb` image ships an entrypoint that prints help and
+      # exits unless a subcommand (`standalone start ...`) is passed. Run the
+      # container manually so we can supply the right command.
+      - name: Start GreptimeDB
+        run: |
+          docker run -d --name greptimedb \
+            -p 4000:4000 -p 4001:4001 -p 4002:4002 \
+            greptime/greptimedb:latest standalone start \
+              --http-addr 0.0.0.0:4000 \
+              --rpc-bind-addr 0.0.0.0:4001 \
+              --mysql-addr 0.0.0.0:4002
+      - name: Wait for GreptimeDB readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
+              echo "GreptimeDB is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "GreptimeDB failed to become ready"
+          docker logs greptimedb
+          exit 1
       - run: INTEGRATION=1 pnpm test:integration
         env:
           GREPTIMEDB_ENDPOINT: localhost:4001
+          GREPTIMEDB_HTTP: http://127.0.0.1:4000
+      - name: Dump GreptimeDB logs on failure
+        if: failure()
+        run: docker logs greptimedb
+      - name: Stop GreptimeDB
+        if: always()
+        run: docker rm -f greptimedb || true

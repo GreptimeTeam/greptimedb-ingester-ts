@@ -98,7 +98,7 @@ await client.writeObject([
 Client.create('host:port')
   .withEndpoints('host2:port', 'host3:port')       // random-peer LB (matches Rust)
   .withDatabase('public')
-  .withBasicAuth('admin', 'pw')                    // or .withTokenAuth('...')
+  .withBasicAuth('admin', 'pw')                    // basic only — server rejects token auth
   .withTls({ kind: 'system' })                     // system | pem | file
   .withTimeout(60_000)
   .withKeepAlive(30_000, 10_000)
@@ -119,7 +119,7 @@ The SDK wires both for you — you configure auth once.
 Class hierarchy (all extend `IngesterError`):
 
 - `ConfigError`, `SchemaError`, `ValueError` — never retriable
-- `TransportError` (with `.grpcCode`), `ServerError` (with `.statusCode`), `TimeoutError`, `AbortedError`, `AuthError`, `BulkError`
+- `TransportError` (with `.grpcCode`), `ServerError` (with `.statusCode`), `TimeoutError`, `AbortedError`, `BulkError`
 
 Classify with `isRetriable(err, 'aggressive' | 'conservative')`. Default is `aggressive` and mirrors Rust's `is_retriable`: every runtime error except local config/schema/value errors is retriable. `conservative` narrows to transient gRPC codes (`UNAVAILABLE` / `DEADLINE_EXCEEDED` / `RESOURCE_EXHAUSTED` / `ABORTED` / `UNKNOWN`).
 

@@ -7,14 +7,14 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
       reject(new AbortedError('aborted before retry sleep'));
       return;
     }
-    const t = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
     const onAbort = (): void => {
       clearTimeout(t);
       reject(new AbortedError('aborted during retry sleep'));
     };
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

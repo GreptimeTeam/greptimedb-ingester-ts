@@ -3,7 +3,7 @@
 // the server's single aggregate `AffectedRows` response.
 
 import { create } from '@bufbuild/protobuf';
-import { Metadata } from '@grpc/grpc-js';
+import { Metadata, status } from '@grpc/grpc-js';
 
 import { buildRequestHeader } from '../auth.js';
 import type { ClientConfig } from '../config.js';
@@ -79,7 +79,13 @@ export class StreamWriter {
       throw new SchemaError(`cannot finish stream in state "${this.state}"`);
     }
     this.state = 'halfClosed';
-    const res = await this.call.finish();
+    let res: GreptimeResponse;
+    try {
+      res = await this.call.finish();
+    } catch (err) {
+      this.state = 'errored';
+      throw err;
+    }
     this.state = 'closed';
     const statusCode = res.header?.status?.statusCode;
     if (statusCode !== undefined && statusCode !== 0) {
@@ -87,7 +93,7 @@ export class StreamWriter {
       throw new ServerError(msg, statusCode);
     }
     if (res.response.case !== 'affectedRows') {
-      throw new TransportError('HandleRequests returned empty response', 2);
+      throw new TransportError('HandleRequests returned empty response', status.UNKNOWN);
     }
     return { value: res.response.value.value };
   }

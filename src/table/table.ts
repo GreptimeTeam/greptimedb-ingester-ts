@@ -4,7 +4,6 @@ import {
   isTimestampDataType,
   precisionToTimestampDataType,
   type DataType,
-  type Semantic,
 } from './data-type.js';
 import { validateTableSchema, type ColumnSpec, type TableSchema } from './schema.js';
 
@@ -144,11 +143,4 @@ export class Table {
     validateTableSchema(schema);
     this._frozen = true;
   }
-
-  /** Expose the semantic helper re-exported from the enum module. */
-  public static readonly semantic = {
-    tag: 'tag' as Semantic,
-    field: 'field' as Semantic,
-    timestamp: 'timestamp' as Semantic,
-  };
 }

@@ -38,6 +38,21 @@ import type { ColumnSpec } from '../table/schema.js';
 import { DataType } from '../table/data-type.js';
 import type { TableSchema } from '../table/schema.js';
 
+const MAX_SAFE_INT = Number.MAX_SAFE_INTEGER;
+const MIN_SAFE_INT = Number.MIN_SAFE_INTEGER;
+
+function numberToSafeBigInt(v: number, name: string): bigint {
+  if (!Number.isFinite(v) || !Number.isInteger(v)) {
+    throw new ValueError(`${name} expected integer number, got ${v}`);
+  }
+  if (v > MAX_SAFE_INT || v < MIN_SAFE_INT) {
+    throw new ValueError(
+      `${name} received number ${v} outside safe integer range; pass a bigint instead`,
+    );
+  }
+  return BigInt(v);
+}
+
 function arrowTypeFor(dt: DataType): ArrowDataType {
   switch (dt) {
     case DataType.Int8:
@@ -87,7 +102,7 @@ function arrowTypeFor(dt: DataType): ArrowDataType {
     case DataType.TimeNanosecond:
       return new TimeNanosecond();
     case DataType.Json:
-      return new Utf8();
+      return new Binary();
   }
 }
 
@@ -109,9 +124,7 @@ function scaleTimestamp(v: unknown, dt: DataType): bigint {
   }
   if (typeof v === 'bigint') return v;
   if (typeof v === 'number') {
-    if (!Number.isFinite(v) || !Number.isInteger(v))
-      throw new ValueError(`timestamp expected integer number, got ${v}`);
-    return BigInt(v);
+    return numberToSafeBigInt(v, 'timestamp');
   }
   throw new ValueError(`timestamp expected number|bigint|Date, got ${typeof v}`);
 }
@@ -121,9 +134,11 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
   switch (dt) {
     case DataType.Int64:
     case DataType.Uint64:
-      return typeof v === 'number' ? BigInt(v) : v;
+      return typeof v === 'number' ? numberToSafeBigInt(v, dt) : v;
     case DataType.Datetime:
-      return v instanceof Date ? BigInt(v.getTime()) : (typeof v === 'number' ? BigInt(v) : v);
+      return v instanceof Date
+        ? BigInt(v.getTime())
+        : (typeof v === 'number' ? numberToSafeBigInt(v, 'Datetime') : v);
     case DataType.Date:
       return v instanceof Date ? Math.floor(v.getTime() / 86_400_000) : v;
     case DataType.TimestampSecond:
@@ -132,7 +147,7 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
     case DataType.TimestampNanosecond:
       return scaleTimestamp(v, dt);
     case DataType.Json:
-      return typeof v === 'string' ? v : JSON.stringify(v);
+      return new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v));
     case DataType.Binary:
       if (v instanceof Uint8Array) return v;
       if (typeof v === 'string') return new TextEncoder().encode(v);

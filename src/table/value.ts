@@ -215,9 +215,10 @@ export function toProtoValue(ts: unknown, dataType: DataType): Value {
       return create(ValueSchema, { valueData: { case: 'timeNanosecondValue', value: b } });
     }
     case DataType.Json: {
-      // The server stores JSON columns as proto `binary` with the JSON text as UTF-8 bytes —
-      // this is what `JSON.stringify(value)` produces after encoding. Strings are taken
-      // verbatim to allow passing pre-serialized JSON.
+      // Unary row-insert path ships JSON columns as `string_value` holding the JSON text.
+      // (The bulk Arrow path, by contrast, ships JSON as a `Binary` column of UTF-8 bytes;
+      // both representations are accepted by the server for a JSON-typed column.)
+      // Strings are taken verbatim to allow passing pre-serialized JSON.
       const text = typeof ts === 'string' ? ts : JSON.stringify(ts);
       return create(ValueSchema, {
         valueData: { case: 'stringValue', value: text },

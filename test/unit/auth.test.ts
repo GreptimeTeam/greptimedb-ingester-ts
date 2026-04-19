@@ -17,12 +17,6 @@ describe('buildRequestHeader (unary/streaming path)', () => {
     }
   });
 
-  it('supports token auth', () => {
-    const cfg = ConfigBuilder.create('localhost:4001').withTokenAuth('t0k').build();
-    const h = buildRequestHeader(cfg);
-    expect(h.authorization?.authScheme.case).toBe('token');
-  });
-
   it('omits authorization when no auth configured', () => {
     const cfg = ConfigBuilder.create('localhost:4001').build();
     const h = buildRequestHeader(cfg);
@@ -42,12 +36,6 @@ describe('buildFlightMetadata (bulk path)', () => {
     expect(auth).toHaveLength(1);
     const expected = `Basic ${Buffer.from('alice:pw').toString('base64')}`;
     expect(auth[0]).toBe(expected);
-  });
-
-  it('uses Bearer for token auth', () => {
-    const cfg = ConfigBuilder.create('localhost:4001').withTokenAuth('abc').build();
-    const md = buildFlightMetadata(cfg);
-    expect(md.get('x-greptime-auth')).toEqual(['Bearer abc']);
   });
 
   it('omits auth header when unauthenticated', () => {

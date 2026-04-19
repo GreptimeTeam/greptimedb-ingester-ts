@@ -1,5 +1,5 @@
 import { createDeferred, type Deferred } from '../internal/deferred.js';
-import { BulkError, TimeoutError } from '../errors.js';
+import { TimeoutError } from '../errors.js';
 
 export interface BulkWriteResponse {
   readonly requestId: number;
@@ -22,11 +22,6 @@ export class RequestTracker {
   public alloc(): number {
     const id = this.nextId++;
     return id;
-  }
-
-  /** Reset the id counter. Used once, after the schema handshake (id=0). */
-  public resetIdCounter(from: number): void {
-    this.nextId = from;
   }
 
   /** Look up an already-tracked request's promise, or `undefined` if unknown. */
@@ -82,10 +77,5 @@ export class RequestTracker {
 
   public pendingIds(): number[] {
     return [...this.pending.keys()];
-  }
-
-  public failPendingAsBulk(message: string): void {
-    const err = new BulkError(message);
-    this.rejectAll(err);
   }
 }

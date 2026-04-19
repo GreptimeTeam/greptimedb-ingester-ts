@@ -2,7 +2,7 @@
 // and unpacks the AffectedRows response.
 
 import { create } from '@bufbuild/protobuf';
-import { Metadata } from '@grpc/grpc-js';
+import { Metadata, status } from '@grpc/grpc-js';
 
 import { buildRequestHeader } from '../auth.js';
 import type { ClientConfig } from '../config.js';
@@ -40,7 +40,7 @@ function extractAffected(res: GreptimeResponse): AffectedRows {
     throw new ServerError(msg, statusCode);
   }
   if (res.response.case !== 'affectedRows') {
-    throw new TransportError('Handle returned empty response', 2);
+    throw new TransportError('Handle returned empty response', status.UNKNOWN);
   }
   return { value: res.response.value.value };
 }

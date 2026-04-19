@@ -28,6 +28,53 @@ function toTransportError(err: ServiceError): TransportError | TimeoutError {
   return new TransportError(err.message, err.code, err);
 }
 
+/**
+ * grpc-js streams emit errors typed as `Error`, but in practice the runtime object
+ * carries the same `code`/`details`/`metadata` shape as `ServiceError`. Probe before
+ * casting so we preserve the real status code (UNAVAILABLE, RESOURCE_EXHAUSTED, ...)
+ * instead of flattening to UNKNOWN.
+ */
+function streamErrorToTransport(err: Error): TransportError | TimeoutError {
+  const maybe = err as Partial<ServiceError>;
+  if (typeof maybe.code === 'number') return toTransportError(maybe as ServiceError);
+  return new TransportError(err.message, status.UNKNOWN, err);
+}
+
+/**
+ * Promise-shaped wrapper around `Writable.write(chunk, cb)` that honors backpressure:
+ * resolves only after the per-chunk callback fires AND, if the call signaled buffer
+ * pressure, after the next 'drain' event. This is the canonical Node stream contract;
+ * the previous "attach a noop drain listener" implementation looked correct but did
+ * not actually slow the producer.
+ */
+function writeWithBackpressure<Req>(
+  call: { write(req: Req, cb: (err?: Error | null) => void): boolean; once(ev: 'drain', cb: () => void): unknown },
+  req: Req,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let cbDone = false;
+    let drainDone = true;
+    const tryResolve = (): void => {
+      if (cbDone && drainDone) resolve();
+    };
+    const ok = call.write(req, (err?: Error | null) => {
+      if (err) {
+        reject(streamErrorToTransport(err));
+        return;
+      }
+      cbDone = true;
+      tryResolve();
+    });
+    if (!ok) {
+      drainDone = false;
+      call.once('drain', () => {
+        drainDone = true;
+        tryResolve();
+      });
+    }
+  });
+}
+
 /** Unary RPC wrapper. Resolves with the response or rejects with a TransportError/TimeoutError. */
 export function unaryCall<Req, Res>(
   client: GrpcClient,
@@ -40,6 +87,13 @@ export function unaryCall<Req, Res>(
       reject(new AbortedError('call aborted before dispatch'));
       return;
     }
+    const signal = opts.signal;
+    let onAbort: (() => void) | undefined;
+    const detach = (): void => {
+      if (signal !== undefined && onAbort !== undefined) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
     const deadline = toDeadline(opts.deadlineMs);
     const call = client.makeUnaryRequest<Req, Res>(
       method.path,
@@ -49,6 +103,7 @@ export function unaryCall<Req, Res>(
       opts.metadata,
       deadline !== undefined ? { deadline } : {},
       (err, res) => {
+        detach();
         if (err) {
           reject(toTransportError(err));
           return;
@@ -60,11 +115,13 @@ export function unaryCall<Req, Res>(
         resolve(res);
       },
     );
-    const onAbort = (): void => {
-      call.cancel();
-      reject(new AbortedError('call aborted'));
-    };
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal !== undefined) {
+      onAbort = (): void => {
+        call.cancel();
+        reject(new AbortedError('call aborted'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 
@@ -81,12 +138,40 @@ export function clientStreamingCall<Req, Res>(
   opts: CallOptions,
 ): ClientStreamingCall<Req, Res> {
   const deadline = toDeadline(opts.deadlineMs);
+  const signal = opts.signal;
   let finishResolve!: (r: Res) => void;
   let finishReject!: (e: unknown) => void;
   const finalPromise = new Promise<Res>((res, rej) => {
     finishResolve = res;
     finishReject = rej;
   });
+  // Pre-abort: if the signal already fired, fail the call before ever opening the
+  // socket-level RPC. Matches `unaryCall`'s contract.
+  if (signal?.aborted === true) {
+    finishReject(new AbortedError('call aborted before dispatch'));
+    finalPromise.catch(() => {
+      /* swallow unobserved rejection */
+    });
+    return {
+      write: () => Promise.reject(new AbortedError('call aborted before dispatch')),
+      finish: () => finalPromise,
+      cancel: () => {
+        /* already aborted */
+      },
+    };
+  }
+  // Attach a no-op rejection handler so `finalPromise` is never "unhandled" if the
+  // caller cancels and then never invokes `finish()`. Callers that DO await `finish()`
+  // still observe the original rejection unchanged.
+  finalPromise.catch(() => {
+    /* swallow unobserved rejection */
+  });
+  let onAbort: (() => void) | undefined;
+  const detach = (): void => {
+    if (signal !== undefined && onAbort !== undefined) {
+      signal.removeEventListener('abort', onAbort);
+    }
+  };
   const call = client.makeClientStreamRequest<Req, Res>(
     method.path,
     method.requestSerialize,
@@ -94,6 +179,7 @@ export function clientStreamingCall<Req, Res>(
     opts.metadata,
     deadline !== undefined ? { deadline } : {},
     (err, res) => {
+      detach();
       if (err) {
         finishReject(toTransportError(err));
         return;
@@ -107,33 +193,16 @@ export function clientStreamingCall<Req, Res>(
       finishResolve(res);
     },
   );
-  const onAbort = (): void => {
-    call.cancel();
-    finishReject(new AbortedError('call aborted'));
-  };
-  opts.signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal !== undefined) {
+    onAbort = (): void => {
+      call.cancel();
+      finishReject(new AbortedError('call aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
 
   return {
-    write(req: Req): Promise<void> {
-      return new Promise<void>((resolve, reject) => {
-        const ok = call.write(req, (err?: Error | null) => {
-          if (err) {
-            reject(
-              err instanceof Error ? new TransportError(err.message, status.UNKNOWN, err) : err,
-            );
-            return;
-          }
-          resolve();
-        });
-        if (!ok) {
-          // Backpressure: wait for drain before resolving the outer promise.
-          // The write callback still fires on success.
-          call.once('drain', () => {
-            /* drained */
-          });
-        }
-      });
-    },
+    write: (req: Req) => writeWithBackpressure(call, req),
     finish(): Promise<Res> {
       call.end();
       return finalPromise;
@@ -158,6 +227,26 @@ export function bidiStreamingCall<Req, Res>(
   opts: CallOptions,
 ): BidiStreamingCall<Req, Res> {
   const deadline = toDeadline(opts.deadlineMs);
+  const signal = opts.signal;
+  // Pre-abort: short-circuit before opening the gRPC call so already-cancelled signals
+  // don't trigger a wasted round-trip. Match unary semantics.
+  if (signal?.aborted === true) {
+    const aborted = new AbortedError('call aborted before dispatch');
+    return {
+      write: () => Promise.reject(aborted),
+      end: () => {
+        /* nothing to do */
+      },
+      responses: () => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.reject(aborted),
+        }),
+      }),
+      cancel: () => {
+        /* already aborted */
+      },
+    };
+  }
   const call = client.makeBidiStreamRequest<Req, Res>(
     method.path,
     method.requestSerialize,
@@ -165,10 +254,19 @@ export function bidiStreamingCall<Req, Res>(
     opts.metadata,
     deadline !== undefined ? { deadline } : {},
   );
-  const onAbort = (): void => {
-    call.cancel();
+  let onAbort: (() => void) | undefined;
+  const detachAbort = (): void => {
+    if (signal !== undefined && onAbort !== undefined) {
+      signal.removeEventListener('abort', onAbort);
+      onAbort = undefined;
+    }
   };
-  opts.signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal !== undefined) {
+    onAbort = (): void => {
+      call.cancel();
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
 
   // Buffer incoming responses so `responses()` is a plain AsyncIterable consumers can
   // loop over without worrying about event-emitter semantics.
@@ -186,11 +284,13 @@ export function bidiStreamingCall<Req, Res>(
     else buffer.push(res);
   });
   call.on('error', (err: Error) => {
-    streamErr = new TransportError(err.message, status.UNKNOWN, err);
+    detachAbort();
+    streamErr = streamErrorToTransport(err);
     const waiters = pullers.splice(0);
     for (const p of waiters) p.reject(streamErr);
   });
   call.on('end', () => {
+    detachAbort();
     ended = true;
     const waiters = pullers.splice(0);
     for (const p of waiters) p.resolve({ value: undefined, done: true });
@@ -216,35 +316,27 @@ export function bidiStreamingCall<Req, Res>(
             pullers.push({ resolve, reject });
           });
         },
+        // Honor `for await`'s early-exit contract: cancelling the underlying call when
+        // the consumer breaks out of the loop prevents leaking gRPC resources.
+        return(): Promise<IteratorResult<Res>> {
+          detachAbort();
+          call.cancel();
+          return Promise.resolve({ value: undefined as unknown as Res, done: true });
+        },
       };
     },
   });
 
   return {
-    write(req: Req): Promise<void> {
-      return new Promise<void>((resolve, reject) => {
-        const ok = call.write(req, (err?: Error | null) => {
-          if (err) {
-            reject(
-              err instanceof Error ? new TransportError(err.message, status.UNKNOWN, err) : err,
-            );
-            return;
-          }
-          resolve();
-        });
-        if (!ok) {
-          call.once('drain', () => {
-            /* drained */
-          });
-        }
-      });
-    },
+    write: (req: Req) => writeWithBackpressure(call, req),
     end(): void {
       call.end();
     },
     responses,
     cancel(_reason?: unknown): void {
+      detachAbort();
       call.cancel();
     },
   };
 }
+

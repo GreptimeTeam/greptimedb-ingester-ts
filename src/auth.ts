@@ -14,14 +14,10 @@ import {
 import type { AuthConfig, ClientConfig } from './config.js';
 
 function buildAuthHeader(auth: AuthConfig): AuthHeader {
-  if (auth.kind === 'basic') {
-    const basic = create(BasicSchema, { username: auth.username, password: auth.password });
-    return create(AuthHeaderSchema, {
-      authScheme: { case: 'basic', value: basic },
-    });
-  }
+  // Only `basic` is supported; see AuthConfig docs.
+  const basic = create(BasicSchema, { username: auth.username, password: auth.password });
   return create(AuthHeaderSchema, {
-    authScheme: { case: 'token', value: { token: auth.token } },
+    authScheme: { case: 'basic', value: basic },
   });
 }
 
@@ -57,9 +53,6 @@ export function buildFlightMetadata(cfg: ClientConfig): Metadata {
 }
 
 function encodeAuthMetadata(auth: AuthConfig): string {
-  if (auth.kind === 'basic') {
-    const encoded = Buffer.from(`${auth.username}:${auth.password}`, 'utf8').toString('base64');
-    return `Basic ${encoded}`;
-  }
-  return `Bearer ${auth.token}`;
+  const encoded = Buffer.from(`${auth.username}:${auth.password}`, 'utf8').toString('base64');
+  return `Basic ${encoded}`;
 }

@@ -15,7 +15,6 @@ export {
 
 export {
   AbortedError,
-  AuthError,
   BulkError,
   ConfigError,
   IngesterError,
