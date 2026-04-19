@@ -31,7 +31,6 @@ jobs:
       - run: pnpm build
 
   integration:
-    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-integration')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
