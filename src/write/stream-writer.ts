@@ -3,9 +3,9 @@
 // the server's single aggregate `AffectedRows` response.
 
 import { create } from '@bufbuild/protobuf';
-import { Metadata } from '@grpc/grpc-js';
+import { status } from '@grpc/grpc-js';
 
-import { buildRequestHeader } from '../auth.js';
+import { buildHintsMetadata, buildRequestHeader } from '../auth.js';
 import type { ClientConfig } from '../config.js';
 import { SchemaError, ServerError, TransportError } from '../errors.js';
 import {
@@ -28,14 +28,6 @@ export interface StreamOptions {
 
 type State = 'open' | 'halfClosed' | 'closed' | 'errored';
 
-function buildMetadata(hints?: Record<string, string>): Metadata {
-  const md = new Metadata();
-  if (hints !== undefined) {
-    for (const [k, v] of Object.entries(hints)) md.set(`x-greptime-hint-${k}`, v);
-  }
-  return md;
-}
-
 export class StreamWriter {
   private readonly call: ClientStreamingCall<GreptimeRequest, GreptimeResponse>;
   private readonly cfg: ClientConfig;
@@ -44,7 +36,7 @@ export class StreamWriter {
   public constructor(channel: Channel, cfg: ClientConfig, opts: StreamOptions | undefined) {
     this.cfg = cfg;
     this.call = clientStreamingCall(channel.unwrap(), HandleRequestsMethod, {
-      metadata: buildMetadata(opts?.hints),
+      metadata: buildHintsMetadata(opts?.hints),
       deadlineMs: opts?.timeoutMs ?? cfg.timeoutMs,
       ...(opts?.signal !== undefined && { signal: opts.signal }),
     });
@@ -79,7 +71,13 @@ export class StreamWriter {
       throw new SchemaError(`cannot finish stream in state "${this.state}"`);
     }
     this.state = 'halfClosed';
-    const res = await this.call.finish();
+    let res: GreptimeResponse;
+    try {
+      res = await this.call.finish();
+    } catch (err) {
+      this.state = 'errored';
+      throw err;
+    }
     this.state = 'closed';
     const statusCode = res.header?.status?.statusCode;
     if (statusCode !== undefined && statusCode !== 0) {
@@ -87,7 +85,7 @@ export class StreamWriter {
       throw new ServerError(msg, statusCode);
     }
     if (res.response.case !== 'affectedRows') {
-      throw new TransportError('HandleRequests returned empty response', 2);
+      throw new TransportError('HandleRequests returned empty response', status.UNKNOWN);
     }
     return { value: res.response.value.value };
   }

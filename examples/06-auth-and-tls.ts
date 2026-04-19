@@ -22,15 +22,21 @@ async function main(): Promise<void> {
     .withBasicAuth(username, password);
 
   // Enable TLS via env flag. Any of the three modes works.
+  const certPath = process.env.GREPTIMEDB_TLS_CERT_PATH;
   if (process.env.GREPTIMEDB_TLS === 'system') {
     builder.withTls({ kind: 'system' });
-  } else if (process.env.GREPTIMEDB_TLS_CERT_PATH !== undefined) {
-    builder.withTls({
+  } else if (certPath !== undefined) {
+    // Build piecewise to stay friendly to `exactOptionalPropertyTypes`: only assign
+    // optional fields when actually present, then narrow back to TlsConfig at the end.
+    const tls: { kind: 'file'; certPath: string; caPath?: string; keyPath?: string } = {
       kind: 'file',
-      caPath: process.env.GREPTIMEDB_TLS_CA_PATH,
-      certPath: process.env.GREPTIMEDB_TLS_CERT_PATH,
-      keyPath: process.env.GREPTIMEDB_TLS_KEY_PATH,
-    });
+      certPath,
+    };
+    const caPath = process.env.GREPTIMEDB_TLS_CA_PATH;
+    const keyPath = process.env.GREPTIMEDB_TLS_KEY_PATH;
+    if (caPath !== undefined) tls.caPath = caPath;
+    if (keyPath !== undefined) tls.keyPath = keyPath;
+    builder.withTls(tls);
   }
 
   const client = new Client(builder.build());

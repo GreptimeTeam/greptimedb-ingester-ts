@@ -19,6 +19,11 @@ import {
 
 const CONTINUATION = 0xffffffff;
 
+// Module-level singletons — TextEncoder/TextDecoder are stateless and safe to share.
+// Avoids one allocation per FlightData frame on both the encode and ack-decode paths.
+const TEXT_ENCODER = /*@__PURE__*/ new TextEncoder();
+const TEXT_DECODER = /*@__PURE__*/ new TextDecoder();
+
 interface IpcMessage {
   readonly metadata: Uint8Array;
   readonly body: Uint8Array;
@@ -85,8 +90,7 @@ function readBodyLength(metadata: Uint8Array): number {
 }
 
 function doPutMetadataBytes(requestId: number): Uint8Array {
-  const json = JSON.stringify({ request_id: requestId });
-  return new TextEncoder().encode(json);
+  return TEXT_ENCODER.encode(JSON.stringify({ request_id: requestId }));
 }
 
 export interface DoPutResponseJson {
@@ -95,8 +99,7 @@ export interface DoPutResponseJson {
 }
 
 export function parseDoPutResponse(appMetadata: Uint8Array): DoPutResponseJson {
-  const json = new TextDecoder().decode(appMetadata);
-  return JSON.parse(json) as DoPutResponseJson;
+  return JSON.parse(TEXT_DECODER.decode(appMetadata)) as DoPutResponseJson;
 }
 
 function pathDescriptor(tableName: string) {

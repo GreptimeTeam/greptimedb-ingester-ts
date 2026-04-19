@@ -2,9 +2,9 @@
 // and unpacks the AffectedRows response.
 
 import { create } from '@bufbuild/protobuf';
-import { Metadata } from '@grpc/grpc-js';
+import { status } from '@grpc/grpc-js';
 
-import { buildRequestHeader } from '../auth.js';
+import { buildHintsMetadata, buildRequestHeader } from '../auth.js';
 import type { ClientConfig } from '../config.js';
 import { ServerError, TransportError } from '../errors.js';
 import {
@@ -25,14 +25,6 @@ export interface WriteOptions {
   readonly hints?: Record<string, string>;
 }
 
-function buildMetadata(hints?: Record<string, string>): Metadata {
-  const md = new Metadata();
-  if (hints !== undefined) {
-    for (const [k, v] of Object.entries(hints)) md.set(`x-greptime-hint-${k}`, v);
-  }
-  return md;
-}
-
 function extractAffected(res: GreptimeResponse): AffectedRows {
   const statusCode = res.header?.status?.statusCode ?? 0;
   if (statusCode !== 0) {
@@ -40,7 +32,7 @@ function extractAffected(res: GreptimeResponse): AffectedRows {
     throw new ServerError(msg, statusCode);
   }
   if (res.response.case !== 'affectedRows') {
-    throw new TransportError('Handle returned empty response', 2);
+    throw new TransportError('Handle returned empty response', status.UNKNOWN);
   }
   return { value: res.response.value.value };
 }
@@ -58,7 +50,7 @@ export async function performUnaryWrite(
     request: { case: 'rowInserts', value: rowInserts },
   });
   const res = await unaryCall(channel.unwrap(), HandleMethod, request, {
-    metadata: buildMetadata(opts?.hints),
+    metadata: buildHintsMetadata(opts?.hints),
     deadlineMs: opts?.timeoutMs ?? cfg.timeoutMs,
     ...(opts?.signal !== undefined && { signal: opts.signal }),
   });

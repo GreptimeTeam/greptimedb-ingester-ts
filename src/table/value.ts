@@ -9,6 +9,9 @@ import { DataType } from './data-type.js';
 
 const EMPTY_VALUE: Value = create(ValueSchema, { valueData: { case: undefined } });
 
+// Module-level singleton — shared across every binary-typed cell on the unary path.
+const TEXT_ENCODER = /*@__PURE__*/ new TextEncoder();
+
 const MAX_SAFE_INT = Number.MAX_SAFE_INTEGER;
 const MIN_SAFE_INT = Number.MIN_SAFE_INTEGER;
 const I8_MIN = -(2 ** 7);
@@ -72,7 +75,7 @@ function asNumber(name: string, v: unknown): number {
 
 function asBinary(v: unknown): Uint8Array {
   if (v instanceof Uint8Array) return v; // Buffer is-a Uint8Array, passes through
-  if (typeof v === 'string') return new TextEncoder().encode(v);
+  if (typeof v === 'string') return TEXT_ENCODER.encode(v);
   throw new ValueError(`binary expected Uint8Array|Buffer|string, got ${typeof v}`);
 }
 
@@ -215,9 +218,10 @@ export function toProtoValue(ts: unknown, dataType: DataType): Value {
       return create(ValueSchema, { valueData: { case: 'timeNanosecondValue', value: b } });
     }
     case DataType.Json: {
-      // The server stores JSON columns as proto `binary` with the JSON text as UTF-8 bytes —
-      // this is what `JSON.stringify(value)` produces after encoding. Strings are taken
-      // verbatim to allow passing pre-serialized JSON.
+      // Unary row-insert path ships JSON columns as `string_value` holding the JSON text.
+      // (The bulk Arrow path, by contrast, ships JSON as a `Binary` column of UTF-8 bytes;
+      // both representations are accepted by the server for a JSON-typed column.)
+      // Strings are taken verbatim to allow passing pre-serialized JSON.
       const text = typeof ts === 'string' ? ts : JSON.stringify(ts);
       return create(ValueSchema, {
         valueData: { case: 'stringValue', value: text },

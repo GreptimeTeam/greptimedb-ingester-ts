@@ -3,19 +3,26 @@ import { AbortedError, isRetriable } from '../errors.js';
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    // Use a const holder so eslint `prefer-const` is satisfied while the timer can
+    // still be both observed by the abort listener and cleared from cleanup.
+    const state: { timer?: NodeJS.Timeout } = {};
+    const cleanup = (): void => {
+      signal?.removeEventListener('abort', onAbort);
+      if (state.timer !== undefined) clearTimeout(state.timer);
+    };
+    const onAbort = (): void => {
+      cleanup();
+      reject(new AbortedError('aborted during retry sleep'));
+    };
     if (signal?.aborted === true) {
       reject(new AbortedError('aborted before retry sleep'));
       return;
     }
-    const t = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    state.timer = setTimeout(() => {
+      cleanup();
       resolve();
     }, ms);
-    const onAbort = (): void => {
-      clearTimeout(t);
-      reject(new AbortedError('aborted during retry sleep'));
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 

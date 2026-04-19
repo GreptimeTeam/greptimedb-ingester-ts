@@ -1,9 +1,17 @@
 import { ConfigError } from './errors.js';
 import type { Logger } from './internal/logger.js';
 
-export type AuthConfig =
-  | { readonly kind: 'basic'; readonly username: string; readonly password: string }
-  | { readonly kind: 'token'; readonly token: string };
+/**
+ * Authentication for the ingest client. Only `basic` is supported — the GreptimeDB
+ * frontend explicitly rejects `AuthScheme::Token` (see
+ * https://github.com/GreptimeTeam/greptimedb/blob/main/src/servers/src/grpc/context_auth.rs).
+ * Token-based auth will be added when server support lands.
+ */
+export interface AuthConfig {
+  readonly kind: 'basic';
+  readonly username: string;
+  readonly password: string;
+}
 
 export type TlsConfig =
   | { readonly kind: 'system' }
@@ -94,11 +102,6 @@ export class ConfigBuilder {
 
   public withBasicAuth(username: string, password: string): this {
     this._auth = { kind: 'basic', username, password };
-    return this;
-  }
-
-  public withTokenAuth(token: string): this {
-    this._auth = { kind: 'token', token };
     return this;
   }
 

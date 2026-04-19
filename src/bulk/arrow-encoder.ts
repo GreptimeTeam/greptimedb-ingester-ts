@@ -34,9 +34,49 @@ import {
 } from 'apache-arrow';
 
 import { ValueError } from '../errors.js';
-import type { ColumnSpec } from '../table/schema.js';
 import { DataType } from '../table/data-type.js';
 import type { TableSchema } from '../table/schema.js';
+
+const MAX_SAFE_INT = Number.MAX_SAFE_INTEGER;
+const MIN_SAFE_INT = Number.MIN_SAFE_INTEGER;
+
+// Exact 64-bit range bounds. Must match the unary path's `asBigInt` bounds in
+// src/table/value.ts so bulk and unary reject the same out-of-range values.
+const I64_MIN = -(1n << 63n);
+const I64_MAX = (1n << 63n) - 1n;
+const U64_MIN = 0n;
+const U64_MAX = (1n << 64n) - 1n;
+
+// Module-level singleton — shared across every JSON / Binary cell encoded on the bulk
+// path. With wide tables and large batches this avoids ~1 allocation per cell.
+const TEXT_ENCODER = /*@__PURE__*/ new TextEncoder();
+
+function numberToSafeBigInt(v: number, name: string): bigint {
+  if (!Number.isFinite(v) || !Number.isInteger(v)) {
+    throw new ValueError(`${name} expected integer number, got ${v}`);
+  }
+  if (v > MAX_SAFE_INT || v < MIN_SAFE_INT) {
+    throw new ValueError(
+      `${name} received number ${v} outside safe integer range; pass a bigint instead`,
+    );
+  }
+  return BigInt(v);
+}
+
+function toBoundedBigInt(v: unknown, name: string, min: bigint, max: bigint): bigint {
+  let b: bigint;
+  if (typeof v === 'bigint') {
+    b = v;
+  } else if (typeof v === 'number') {
+    b = numberToSafeBigInt(v, name);
+  } else {
+    throw new ValueError(`${name} expected bigint|number, got ${typeof v}`);
+  }
+  if (b < min || b > max) {
+    throw new ValueError(`${name} value ${b} out of range [${min}, ${max}]`);
+  }
+  return b;
+}
 
 function arrowTypeFor(dt: DataType): ArrowDataType {
   switch (dt) {
@@ -87,7 +127,7 @@ function arrowTypeFor(dt: DataType): ArrowDataType {
     case DataType.TimeNanosecond:
       return new TimeNanosecond();
     case DataType.Json:
-      return new Utf8();
+      return new Binary();
   }
 }
 
@@ -109,9 +149,7 @@ function scaleTimestamp(v: unknown, dt: DataType): bigint {
   }
   if (typeof v === 'bigint') return v;
   if (typeof v === 'number') {
-    if (!Number.isFinite(v) || !Number.isInteger(v))
-      throw new ValueError(`timestamp expected integer number, got ${v}`);
-    return BigInt(v);
+    return numberToSafeBigInt(v, 'timestamp');
   }
   throw new ValueError(`timestamp expected number|bigint|Date, got ${typeof v}`);
 }
@@ -120,10 +158,13 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
   if (v === null || v === undefined) return null;
   switch (dt) {
     case DataType.Int64:
+      return toBoundedBigInt(v, 'Int64', I64_MIN, I64_MAX);
     case DataType.Uint64:
-      return typeof v === 'number' ? BigInt(v) : v;
+      return toBoundedBigInt(v, 'Uint64', U64_MIN, U64_MAX);
     case DataType.Datetime:
-      return v instanceof Date ? BigInt(v.getTime()) : (typeof v === 'number' ? BigInt(v) : v);
+      return v instanceof Date
+        ? BigInt(v.getTime())
+        : (typeof v === 'number' ? numberToSafeBigInt(v, 'Datetime') : v);
     case DataType.Date:
       return v instanceof Date ? Math.floor(v.getTime() / 86_400_000) : v;
     case DataType.TimestampSecond:
@@ -132,40 +173,72 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
     case DataType.TimestampNanosecond:
       return scaleTimestamp(v, dt);
     case DataType.Json:
-      return typeof v === 'string' ? v : JSON.stringify(v);
+      return TEXT_ENCODER.encode(typeof v === 'string' ? v : JSON.stringify(v));
     case DataType.Binary:
       if (v instanceof Uint8Array) return v;
-      if (typeof v === 'string') return new TextEncoder().encode(v);
+      if (typeof v === 'string') return TEXT_ENCODER.encode(v);
       throw new ValueError(`Binary expected Uint8Array|string, got ${typeof v}`);
     default:
       return v;
   }
 }
 
-function buildColumn(spec: ColumnSpec, rows: readonly (readonly unknown[])[], colIdx: number): Vector {
-  const arrowType = arrowTypeFor(spec.dataType);
+function buildColumnWithType(
+  arrowType: ArrowDataType,
+  dataType: DataType,
+  rows: readonly (readonly unknown[])[],
+  colIdx: number,
+): Vector {
   const builder: Builder = makeBuilder({ type: arrowType, nullValues: [null, undefined] });
   for (const row of rows) {
     const raw = row[colIdx];
-    const v = normalizeValue(raw, spec.dataType);
+    const v = normalizeValue(raw, dataType);
     builder.append(v);
   }
   builder.finish();
   return builder.toVector();
 }
 
+/**
+ * Pre-computed Arrow schema artifacts that can be hoisted out of the per-batch hot path.
+ * `BulkStreamWriter` builds this once at construction and reuses it across every batch.
+ */
+export interface PrecomputedArrowSchema {
+  readonly arrowSchema: Schema;
+  readonly arrowTypes: readonly ArrowDataType[];
+}
+
+export function precomputeArrowSchema(schema: TableSchema): PrecomputedArrowSchema {
+  const arrowTypes: ArrowDataType[] = schema.columns.map((c) => arrowTypeFor(c.dataType));
+  const fields: Field[] = [];
+  for (let i = 0; i < schema.columns.length; i++) {
+    const column = schema.columns[i];
+    const arrowType = arrowTypes[i];
+    if (column === undefined || arrowType === undefined) {
+      throw new ValueError('schema/arrow type length mismatch');
+    }
+    fields.push(new Field(column.name, arrowType, true));
+  }
+  return { arrowSchema: new Schema(fields), arrowTypes };
+}
+
 export function rowsToArrowTable(
   schema: TableSchema,
   rows: readonly (readonly unknown[])[],
+  precomputed?: PrecomputedArrowSchema,
 ): ArrowTable {
-  const fields: Field[] = schema.columns.map(
-    (c) => new Field(c.name, arrowTypeFor(c.dataType), true),
-  );
-  const arrowSchema = new Schema(fields);
+  const { arrowSchema, arrowTypes } = precomputed ?? precomputeArrowSchema(schema);
   const vectors: Record<string, Vector> = {};
-  schema.columns.forEach((c, i) => {
-    vectors[c.name] = buildColumn(c, rows, i);
-  });
-  // Table constructor accepts (schema, ...{[name]: Vector}[]) form.
+  for (let i = 0; i < arrowTypes.length; i++) {
+    const arrowType = arrowTypes[i];
+    const column = schema.columns[i];
+    if (arrowType === undefined || column === undefined) {
+      throw new ValueError('schema/arrow type length mismatch');
+    }
+    vectors[column.name] = buildColumnWithType(arrowType, column.dataType, rows, i);
+  }
+  // ArrowTable's constructor signature is variadic-generic over the column-bag shape;
+  // a single `Record<string, Vector>` doesn't unify with the rest-parameter inference.
+  // The `as never` is a type-only escape hatch — runtime contract is unchanged.
   return new ArrowTable(arrowSchema, vectors as never);
 }

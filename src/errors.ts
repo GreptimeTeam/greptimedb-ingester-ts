@@ -21,14 +21,6 @@ export class ConfigError extends IngesterError {
   }
 }
 
-/** Authentication / authorization failure. */
-export class AuthError extends IngesterError {
-  public readonly kind = 'auth' as const;
-  public constructor(message: string, cause?: unknown) {
-    super(message, cause);
-  }
-}
-
 /** Schema validation failure (duplicate columns, wrong row length, etc.). NOT retriable. */
 export class SchemaError extends IngesterError {
   public readonly kind = 'schema' as const;

@@ -2,8 +2,8 @@
 // the class field decorator context and registers a column in the per-class metadata
 // registry the first time any instance is constructed.
 
+import { Precision as PrecisionValue, precisionToTimestampDataType } from '../table/data-type.js';
 import type { DataType, Precision } from '../table/data-type.js';
-import { Precision as PrecisionValue } from '../table/data-type.js';
 import { getOrCreate, registerColumn } from './metadata.js';
 
 type FieldDecorator = (value: undefined, context: ClassFieldDecoratorContext) => void;
@@ -71,7 +71,5 @@ export function timestamp(opts: TimestampOptions = {}): FieldDecorator {
     });
   };
 }
-
-import { precisionToTimestampDataType } from '../table/data-type.js';
 
 export { getMetadata, type ClassMetadata, type ColumnMetadata } from './metadata.js';

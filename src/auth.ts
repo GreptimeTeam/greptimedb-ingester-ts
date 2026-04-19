@@ -1,5 +1,5 @@
 // Two auth/context paths — unary/streaming go via proto RequestHeader; bulk via gRPC metadata.
-// See plan §"认证与上下文分两条通路".
+// Bulk cannot carry RequestHeader, so auth/dbname must travel in transport metadata instead.
 
 import { create } from '@bufbuild/protobuf';
 import { Metadata } from '@grpc/grpc-js';
@@ -12,16 +12,24 @@ import {
   type RequestHeader,
 } from './generated/greptime/v1/common_pb.js';
 import type { AuthConfig, ClientConfig } from './config.js';
+import { ValueError } from './errors.js';
+
+/**
+ * Frozen empty Metadata reused for hint-less calls so the unary/streaming hot paths
+ * don't allocate a new Metadata per write. grpc-js clones request metadata before
+ * mutation, so sharing this instance is safe.
+ */
+export const EMPTY_METADATA: Metadata = (() => {
+  const md = new Metadata();
+  Object.freeze(md);
+  return md;
+})();
 
 function buildAuthHeader(auth: AuthConfig): AuthHeader {
-  if (auth.kind === 'basic') {
-    const basic = create(BasicSchema, { username: auth.username, password: auth.password });
-    return create(AuthHeaderSchema, {
-      authScheme: { case: 'basic', value: basic },
-    });
-  }
+  // Only `basic` is supported; see AuthConfig docs.
+  const basic = create(BasicSchema, { username: auth.username, password: auth.password });
   return create(AuthHeaderSchema, {
-    authScheme: { case: 'token', value: { token: auth.token } },
+    authScheme: { case: 'basic', value: basic },
   });
 }
 
@@ -57,9 +65,39 @@ export function buildFlightMetadata(cfg: ClientConfig): Metadata {
 }
 
 function encodeAuthMetadata(auth: AuthConfig): string {
-  if (auth.kind === 'basic') {
-    const encoded = Buffer.from(`${auth.username}:${auth.password}`, 'utf8').toString('base64');
-    return `Basic ${encoded}`;
+  const encoded = Buffer.from(`${auth.username}:${auth.password}`, 'utf8').toString('base64');
+  return `Basic ${encoded}`;
+}
+
+/**
+ * Build a `Metadata` carrying GreptimeDB hints for the unary/streaming path.
+ *
+ * Wire format matches Rust `database.rs:198-211`: a single `x-greptime-hints` header
+ * with comma-joined `key=value` pairs. The protocol has no escaping mechanism, so any
+ * key or value containing `,` or `=` is rejected with `ValueError` — silently mangling
+ * such inputs would produce wrong server-side behavior with no diagnostic.
+ *
+ * Returns the shared frozen `EMPTY_METADATA` when `hints` is undefined or empty so
+ * callers don't allocate per write.
+ */
+export function buildHintsMetadata(hints?: Record<string, string>): Metadata {
+  if (hints === undefined) return EMPTY_METADATA;
+  const entries = Object.entries(hints);
+  if (entries.length === 0) return EMPTY_METADATA;
+  const parts: string[] = [];
+  for (const [k, v] of entries) {
+    if (k.length === 0) {
+      throw new ValueError('hint key must not be empty');
+    }
+    if (k.includes(',') || k.includes('=')) {
+      throw new ValueError(`hint key "${k}" contains illegal character ',' or '='`);
+    }
+    if (v.includes(',') || v.includes('=')) {
+      throw new ValueError(`hint value for "${k}" contains illegal character ',' or '='`);
+    }
+    parts.push(`${k}=${v}`);
   }
-  return `Bearer ${auth.token}`;
+  const md = new Metadata();
+  md.set('x-greptime-hints', parts.join(','));
+  return md;
 }

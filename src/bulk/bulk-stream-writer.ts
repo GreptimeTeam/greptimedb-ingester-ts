@@ -19,7 +19,7 @@ import type { Channel } from '../transport/channel.js';
 import { bidiStreamingCall, type BidiStreamingCall } from '../transport/promise-adapter.js';
 import { buildFlightMetadata } from '../auth.js';
 import { validateTableSchema, type TableSchema } from '../table/schema.js';
-import { rowsToArrowTable } from './arrow-encoder.js';
+import { precomputeArrowSchema, rowsToArrowTable, type PrecomputedArrowSchema } from './arrow-encoder.js';
 import {
   buildBatchFlightData,
   buildSchemaFlightData,
@@ -30,6 +30,7 @@ import {
 import { Semaphore } from './parallelism.js';
 import { RequestTracker, type BulkWriteResponse } from './request-tracker.js';
 import { BulkCompression } from './compression.js';
+import { createDeferred, type Deferred } from '../internal/deferred.js';
 
 export interface BulkWriteOptions {
   readonly compression?: BulkCompression;
@@ -48,13 +49,34 @@ export interface BulkFinishSummary {
 
 type State = 'fresh' | 'ready' | 'halfClosed' | 'closed' | 'errored';
 
+// One write batch may serialize into multiple Arrow IPC frames (Arrow can split very large
+// RecordBatches internally). Each frame gets its own request_id so the server's per-frame
+// PutResult can be correlated. The user-facing API still returns one id and one promise per
+// `writeRowsAsync`; we aggregate sub-frame acks here.
+interface FrameGroup {
+  readonly userId: number;
+  readonly subIds: readonly number[];
+  remaining: number;
+  totalAffected: number;
+  readonly deferred: Deferred<BulkWriteResponse>;
+}
+
+type SettledGroup =
+  | { readonly ok: true; readonly value: BulkWriteResponse }
+  | { readonly ok: false; readonly error: unknown };
+
 export class BulkStreamWriter {
   private readonly call: BidiStreamingCall<FlightData, PutResult>;
   private readonly tracker = new RequestTracker();
   private readonly semaphore: Semaphore;
   private readonly schema: TableSchema;
   private readonly schemaArrow: ReturnType<typeof schemaToIpcMessage>;
+  // Hoisted Arrow schema artifacts: built once at construction, reused for every batch.
+  // Without this each `writeRowsAsync` re-allocates the same Schema/Field/type instances.
+  private readonly precomputedArrow: PrecomputedArrowSchema;
   private readonly timeoutMs?: number;
+  private readonly groups = new Map<number, FrameGroup>();
+  private readonly completed = new Map<number, SettledGroup>();
   private state: State = 'fresh';
   private totalAffected = 0;
   private totalRequests = 0;
@@ -81,13 +103,15 @@ export class BulkStreamWriter {
       );
     }
     this.schema = schema;
-    const parallelism = opts?.parallelism ?? 8;
+    // Default parallelism aligned with Rust SDK `src/bulk.rs:129` (4).
+    const parallelism = opts?.parallelism ?? 4;
     this.semaphore = new Semaphore(parallelism);
     if (opts?.timeoutMs !== undefined) this.timeoutMs = opts.timeoutMs;
 
-    // Pre-encode the Arrow schema once — it's reused for every batch's handshake.
-    const arrowSchema = rowsToArrowTable(schema, []).schema;
-    this.schemaArrow = schemaToIpcMessage(arrowSchema);
+    // Pre-compute Arrow schema artifacts (Field[], Type[], Schema) once. Reused both
+    // for the schema handshake frame and for every subsequent `writeRowsAsync` batch.
+    this.precomputedArrow = precomputeArrowSchema(schema);
+    this.schemaArrow = schemaToIpcMessage(this.precomputedArrow.arrowSchema);
 
     this.call = bidiStreamingCall(channel.unwrap(), DoPutMethod, {
       metadata: buildFlightMetadata(cfg),
@@ -112,9 +136,9 @@ export class BulkStreamWriter {
     if (this.handshakePromise !== undefined) return this.handshakePromise;
     this.handshakePromise = (async () => {
       const schemaFlight = buildSchemaFlightData(this.schema.tableName, this.schemaArrow);
-      // request_id=0 is the schema ACK correlation id (server mirrors it back).
+      // request_id=0 is the schema ACK correlation id (server mirrors it back). The
+      // tracker's `alloc()` counter already starts at 1 so user batches get distinct ids.
       const ackPromise = this.tracker.track(0, this.timeoutMs);
-      this.tracker.resetIdCounter(1);
       try {
         await this.call.write(schemaFlight);
       } catch (err) {
@@ -156,64 +180,137 @@ export class BulkStreamWriter {
     if (this.state !== 'ready') {
       throw new BulkError(`cannot write in state "${this.state}"`);
     }
+    // Acquire one semaphore slot per user-batch (regardless of sub-frame count) — limiting
+    // by user-batches matches the documented `parallelism` semantics.
     await this.semaphore.acquire();
-    const id = this.tracker.alloc();
-    const track = this.tracker.track(id, this.timeoutMs);
-    // Release the semaphore on settle. Attaching both branches here keeps the
-    // background release path from surfacing an "unhandled rejection" — the real
-    // rejection is still observable via waitForResponse/writeRows.
-    track.then(
-      () => {
+
+    // Encode first so we know the sub-frame count before allocating ids.
+    let batchMessages: ReturnType<typeof encodeTableForFlight>['batchMessages'];
+    try {
+      const arrowTable = rowsToArrowTable(this.schema, batch.rows, this.precomputedArrow);
+      ({ batchMessages } = encodeTableForFlight(arrowTable));
+    } catch (err) {
+      this.semaphore.release();
+      throw err;
+    }
+
+    if (batchMessages.length === 0) {
+      // Zero-row batch — record a completed synthetic result so waitForResponse(id)
+      // resolves cleanly without pinning a live group forever.
+      const id = this.tracker.alloc();
+      this.completed.set(id, {
+        ok: true,
+        value: { requestId: id, affectedRows: 0 },
+      });
+      this.semaphore.release();
+      return id;
+    }
+
+    const subIds = batchMessages.map(() => this.tracker.alloc());
+    const subPromises = subIds.map((id) => this.tracker.track(id, this.timeoutMs));
+    const userId = subIds[0];
+    if (userId === undefined) {
+      this.semaphore.release();
+      throw new BulkError('internal error: missing request_id for encoded batch');
+    }
+    const group: FrameGroup = {
+      userId,
+      subIds,
+      remaining: subIds.length,
+      totalAffected: 0,
+      deferred: createDeferred<BulkWriteResponse>(),
+    };
+    this.groups.set(userId, group);
+
+    // Wire sub-acks → group aggregate. Each sub-promise rejection fails the group fast
+    // (subsequent sub-promises still settle but are ignored).
+    for (const p of subPromises) {
+      p.then(
+        (r) => {
+          group.totalAffected += r.affectedRows;
+          group.remaining--;
+          if (group.remaining === 0) {
+            group.deferred.resolve({ requestId: userId, affectedRows: group.totalAffected });
+          }
+        },
+        (err: unknown) => {
+          group.remaining = -1; // mark failed; later sub-acks no-op via deferred idempotency
+          group.deferred.reject(err);
+        },
+      );
+    }
+
+    // Single semaphore release once the whole group settles. Move settled results out of
+    // the live-group map so a long-running writer does not accumulate completed groups.
+    group.deferred.promise.then(
+      (value) => {
+        this.groups.delete(userId);
+        this.completed.set(userId, { ok: true, value });
         this.semaphore.release();
       },
-      () => {
+      (err: unknown) => {
+        this.groups.delete(userId);
+        this.completed.set(userId, { ok: false, error: err });
         this.semaphore.release();
       },
     );
 
-    const arrowTable = rowsToArrowTable(this.schema, batch.rows);
-    const { batchMessages } = encodeTableForFlight(arrowTable);
-    if (batchMessages.length === 0) {
-      // Zero-row batch — synthesize an ack so callers aren't stranded.
-      this.tracker.resolve(id, { requestId: id, affectedRows: 0 });
-      return id;
-    }
-    if (batchMessages.length > 1) {
-      // Arrow may split very large batches internally. Each sub-batch rides a distinct
-      // request id; for simplicity v0.1 sends them all under the same id. If this becomes
-      // observable (it shouldn't at typical batch sizes), we'll allocate one id per frame.
-    }
     try {
-      for (const msg of batchMessages) {
-        const flight = buildBatchFlightData(msg, id);
-        await this.call.write(flight);
+      for (let i = 0; i < batchMessages.length; i++) {
+        const msg = batchMessages[i];
+        const id = subIds[i];
+        if (msg === undefined || id === undefined) {
+          throw new BulkError('internal error: frame/request_id count mismatch', userId);
+        }
+        await this.call.write(buildBatchFlightData(msg, id));
       }
     } catch (err) {
       this.state = 'errored';
-      this.tracker.reject(id, err);
+      // Reject any still-pending sub-ids; the aggregate forwards the rejection.
+      for (const id of subIds) this.tracker.reject(id, err);
       throw err;
     }
     this.totalRequests++;
-    return id;
+    return userId;
   }
 
   public waitForResponse(id: number, opts?: { timeoutMs?: number }): Promise<BulkWriteResponse> {
-    const existing = this.tracker.getPromise(id);
+    const settled = this.completed.get(id);
+    let existing: Promise<BulkWriteResponse> | undefined;
+    if (settled !== undefined) {
+      this.completed.delete(id);
+      if (settled.ok) {
+        existing = Promise.resolve(settled.value);
+      } else {
+        const errVal = settled.error;
+        existing = Promise.reject(
+          errVal instanceof Error
+            ? errVal
+            : new BulkError(
+                typeof errVal === 'string' ? errVal : 'bulk request failed',
+                id,
+                errVal,
+              ),
+        );
+      }
+    } else {
+      const group = this.groups.get(id);
+      existing = group?.deferred.promise ?? this.tracker.getPromise(id);
+    }
     if (existing === undefined) {
       return Promise.reject(new BulkError(`no pending response for request_id ${id}`, id));
     }
-    if (opts?.timeoutMs !== undefined) {
-      const timeoutMs = opts.timeoutMs;
-      return Promise.race([
-        existing,
-        new Promise<BulkWriteResponse>((_, rej) => {
-          setTimeout(() => {
-            rej(new BulkError(`waitForResponse ${id} timed out`, id));
-          }, timeoutMs);
-        }),
-      ]);
-    }
-    return existing;
+    if (opts?.timeoutMs === undefined) return existing;
+    const timeoutMs = opts.timeoutMs;
+    let timer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<BulkWriteResponse>((_, rej) => {
+      timer = setTimeout(() => {
+        rej(new BulkError(`waitForResponse ${id} timed out`, id));
+      }, timeoutMs);
+    });
+    return Promise.race([existing, timeoutPromise]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
   }
 
   /** Half-close the stream, drain outstanding responses, return summary. */
@@ -246,6 +343,13 @@ export class BulkStreamWriter {
     if (this.state === 'closed' || this.state === 'errored') return;
     this.state = 'errored';
     this.call.cancel(reason);
+    // Reject all tracked sub-ids. Each group's `.then()` aggregate handler will
+    // observe the rejection asynchronously (next microtask) and move the group
+    // into `completed` via `recordCompleted`. We intentionally do NOT clear
+    // `groups` or `completed` here — doing so would create a race window between
+    // `cancel()` returning and those microtasks settling, during which a caller's
+    // `waitForResponse(userId)` would see neither map and fail with "no pending
+    // response" instead of the real cancellation error.
     this.tracker.rejectAll(reason ?? new BulkError('bulk stream cancelled'));
   }
 
@@ -258,6 +362,8 @@ export class BulkStreamWriter {
             requestId: parsed.request_id,
             affectedRows: parsed.affected_rows,
           };
+          // totalAffected counts every sub-frame ack: server sends one PutResult per
+          // FlightData frame, and we sum them across frames + groups.
           this.totalAffected += resp.affectedRows;
           this.tracker.resolve(parsed.request_id, resp);
         } catch (err) {

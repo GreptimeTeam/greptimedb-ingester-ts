@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildFlightMetadata, buildRequestHeader } from '../../src/auth.js';
-import { ConfigBuilder } from '../../src/index.js';
+import {
+  buildFlightMetadata,
+  buildHintsMetadata,
+  buildRequestHeader,
+  EMPTY_METADATA,
+} from '../../src/auth.js';
+import { ConfigBuilder, ValueError } from '../../src/index.js';
 
 describe('buildRequestHeader (unary/streaming path)', () => {
   it('embeds dbname and basic auth into proto RequestHeader', () => {
@@ -15,12 +20,6 @@ describe('buildRequestHeader (unary/streaming path)', () => {
       expect(h.authorization.authScheme.value.username).toBe('alice');
       expect(h.authorization.authScheme.value.password).toBe('pw');
     }
-  });
-
-  it('supports token auth', () => {
-    const cfg = ConfigBuilder.create('localhost:4001').withTokenAuth('t0k').build();
-    const h = buildRequestHeader(cfg);
-    expect(h.authorization?.authScheme.case).toBe('token');
   });
 
   it('omits authorization when no auth configured', () => {
@@ -44,15 +43,41 @@ describe('buildFlightMetadata (bulk path)', () => {
     expect(auth[0]).toBe(expected);
   });
 
-  it('uses Bearer for token auth', () => {
-    const cfg = ConfigBuilder.create('localhost:4001').withTokenAuth('abc').build();
-    const md = buildFlightMetadata(cfg);
-    expect(md.get('x-greptime-auth')).toEqual(['Bearer abc']);
-  });
-
   it('omits auth header when unauthenticated', () => {
     const cfg = ConfigBuilder.create('localhost:4001').build();
     const md = buildFlightMetadata(cfg);
     expect(md.get('x-greptime-auth')).toEqual([]);
+  });
+});
+
+describe('buildHintsMetadata (unary/streaming hints — Rust-aligned wire format)', () => {
+  it('returns the shared frozen empty Metadata when hints is undefined', () => {
+    expect(buildHintsMetadata(undefined)).toBe(EMPTY_METADATA);
+  });
+
+  it('returns the shared frozen empty Metadata when hints is empty', () => {
+    expect(buildHintsMetadata({})).toBe(EMPTY_METADATA);
+  });
+
+  it('serializes hints as a single x-greptime-hints comma-joined header', () => {
+    const md = buildHintsMetadata({ ttl: '7d', mode: 'append' });
+    // Single key with comma-joined value, matching Rust src/database.rs:198-211.
+    expect(md.get('x-greptime-hints')).toEqual(['ttl=7d,mode=append']);
+    // Per-key form (used by the previous broken implementation) must NOT appear.
+    expect(md.get('x-greptime-hint-ttl')).toEqual([]);
+  });
+
+  it('rejects empty key', () => {
+    expect(() => buildHintsMetadata({ '': 'v' })).toThrow(ValueError);
+  });
+
+  it('rejects key containing illegal "," or "="', () => {
+    expect(() => buildHintsMetadata({ 'a,b': 'v' })).toThrow(ValueError);
+    expect(() => buildHintsMetadata({ 'a=b': 'v' })).toThrow(ValueError);
+  });
+
+  it('rejects value containing illegal "," or "="', () => {
+    expect(() => buildHintsMetadata({ k: 'a,b' })).toThrow(ValueError);
+    expect(() => buildHintsMetadata({ k: 'a=b' })).toThrow(ValueError);
   });
 });
