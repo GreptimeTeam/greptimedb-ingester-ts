@@ -1,0 +1,107 @@
+{
+  "name": "@greptime/ingester",
+  "version": "0.1.0-alpha.0",
+  "description": "Official TypeScript ingester SDK for GreptimeDB (gRPC row + streaming + Arrow Flight bulk).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.9",
+  "keywords": [
+    "greptimedb",
+    "greptime",
+    "timeseries",
+    "ingest",
+    "grpc",
+    "arrow-flight",
+    "observability"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GreptimeTeam/greptimedb-ingester-ts"
+  },
+  "bugs": {
+    "url": "https://github.com/GreptimeTeam/greptimedb-ingester-ts/issues"
+  },
+  "homepage": "https://github.com/GreptimeTeam/greptimedb-ingester-ts#readme",
+  "author": "Greptime Team",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "tshy": {
+    "exports": {
+      ".": "./src/index.ts",
+      "./package.json": "./package.json"
+    },
+    "dialects": [
+      "esm",
+      "commonjs"
+    ]
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/commonjs/index.d.ts",
+        "default": "./dist/commonjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/commonjs/index.js",
+  "types": "./dist/commonjs/index.d.ts",
+  "module": "./dist/esm/index.js",
+  "scripts": {
+    "build": "tshy",
+    "clean": "rimraf dist .tshy .tshy-build",
+    "codegen": "buf generate",
+    "codegen:check": "pnpm codegen && git diff --exit-code src/generated",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "INTEGRATION=1 vitest run",
+    "test:all": "INTEGRATION=1 vitest run",
+    "bench": "tsx bench/index.ts",
+    "example": "tsx scripts/run-example.ts",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.2.0",
+    "@grpc/grpc-js": "^1.12.0",
+    "apache-arrow": "^18.0.0"
+  },
+  "optionalDependencies": {
+    "@mongodb-js/zstd": "^2.0.0",
+    "lz4-napi": "^2.7.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.47.0",
+    "@bufbuild/protoc-gen-es": "^2.2.0",
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.9.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "eslint": "^9.14.0",
+    "globals": "^15.12.0",
+    "hdr-histogram-js": "^3.0.0",
+    "mitata": "^1.0.0",
+    "prettier": "^3.3.3",
+    "rimraf": "^6.0.1",
+    "testcontainers": "^10.13.0",
+    "tshy": "^3.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.13.0",
+    "vitest": "^2.1.0"
+  }
+}
