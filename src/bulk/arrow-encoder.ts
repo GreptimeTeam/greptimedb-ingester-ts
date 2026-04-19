@@ -34,12 +34,15 @@ import {
 } from 'apache-arrow';
 
 import { ValueError } from '../errors.js';
-import type { ColumnSpec } from '../table/schema.js';
 import { DataType } from '../table/data-type.js';
 import type { TableSchema } from '../table/schema.js';
 
 const MAX_SAFE_INT = Number.MAX_SAFE_INTEGER;
 const MIN_SAFE_INT = Number.MIN_SAFE_INTEGER;
+
+// Module-level singleton — shared across every JSON / Binary cell encoded on the bulk
+// path. With wide tables and large batches this avoids ~1 allocation per cell.
+const TEXT_ENCODER = /*@__PURE__*/ new TextEncoder();
 
 function numberToSafeBigInt(v: number, name: string): bigint {
   if (!Number.isFinite(v) || !Number.isInteger(v)) {
@@ -147,40 +150,72 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
     case DataType.TimestampNanosecond:
       return scaleTimestamp(v, dt);
     case DataType.Json:
-      return new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v));
+      return TEXT_ENCODER.encode(typeof v === 'string' ? v : JSON.stringify(v));
     case DataType.Binary:
       if (v instanceof Uint8Array) return v;
-      if (typeof v === 'string') return new TextEncoder().encode(v);
+      if (typeof v === 'string') return TEXT_ENCODER.encode(v);
       throw new ValueError(`Binary expected Uint8Array|string, got ${typeof v}`);
     default:
       return v;
   }
 }
 
-function buildColumn(spec: ColumnSpec, rows: readonly (readonly unknown[])[], colIdx: number): Vector {
-  const arrowType = arrowTypeFor(spec.dataType);
+function buildColumnWithType(
+  arrowType: ArrowDataType,
+  dataType: DataType,
+  rows: readonly (readonly unknown[])[],
+  colIdx: number,
+): Vector {
   const builder: Builder = makeBuilder({ type: arrowType, nullValues: [null, undefined] });
   for (const row of rows) {
     const raw = row[colIdx];
-    const v = normalizeValue(raw, spec.dataType);
+    const v = normalizeValue(raw, dataType);
     builder.append(v);
   }
   builder.finish();
   return builder.toVector();
 }
 
+/**
+ * Pre-computed Arrow schema artifacts that can be hoisted out of the per-batch hot path.
+ * `BulkStreamWriter` builds this once at construction and reuses it across every batch.
+ */
+export interface PrecomputedArrowSchema {
+  readonly arrowSchema: Schema;
+  readonly arrowTypes: readonly ArrowDataType[];
+}
+
+export function precomputeArrowSchema(schema: TableSchema): PrecomputedArrowSchema {
+  const arrowTypes: ArrowDataType[] = schema.columns.map((c) => arrowTypeFor(c.dataType));
+  const fields: Field[] = [];
+  for (let i = 0; i < schema.columns.length; i++) {
+    const column = schema.columns[i];
+    const arrowType = arrowTypes[i];
+    if (column === undefined || arrowType === undefined) {
+      throw new ValueError('schema/arrow type length mismatch');
+    }
+    fields.push(new Field(column.name, arrowType, true));
+  }
+  return { arrowSchema: new Schema(fields), arrowTypes };
+}
+
 export function rowsToArrowTable(
   schema: TableSchema,
   rows: readonly (readonly unknown[])[],
+  precomputed?: PrecomputedArrowSchema,
 ): ArrowTable {
-  const fields: Field[] = schema.columns.map(
-    (c) => new Field(c.name, arrowTypeFor(c.dataType), true),
-  );
-  const arrowSchema = new Schema(fields);
+  const { arrowSchema, arrowTypes } = precomputed ?? precomputeArrowSchema(schema);
   const vectors: Record<string, Vector> = {};
-  schema.columns.forEach((c, i) => {
-    vectors[c.name] = buildColumn(c, rows, i);
-  });
-  // Table constructor accepts (schema, ...{[name]: Vector}[]) form.
+  for (let i = 0; i < arrowTypes.length; i++) {
+    const arrowType = arrowTypes[i];
+    const column = schema.columns[i];
+    if (arrowType === undefined || column === undefined) {
+      throw new ValueError('schema/arrow type length mismatch');
+    }
+    vectors[column.name] = buildColumnWithType(arrowType, column.dataType, rows, i);
+  }
+  // ArrowTable's constructor signature is variadic-generic over the column-bag shape;
+  // a single `Record<string, Vector>` doesn't unify with the rest-parameter inference.
+  // The `as never` is a type-only escape hatch — runtime contract is unchanged.
   return new ArrowTable(arrowSchema, vectors as never);
 }

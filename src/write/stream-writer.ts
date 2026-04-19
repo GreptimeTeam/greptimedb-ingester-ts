@@ -3,9 +3,9 @@
 // the server's single aggregate `AffectedRows` response.
 
 import { create } from '@bufbuild/protobuf';
-import { Metadata, status } from '@grpc/grpc-js';
+import { status } from '@grpc/grpc-js';
 
-import { buildRequestHeader } from '../auth.js';
+import { buildHintsMetadata, buildRequestHeader } from '../auth.js';
 import type { ClientConfig } from '../config.js';
 import { SchemaError, ServerError, TransportError } from '../errors.js';
 import {
@@ -28,14 +28,6 @@ export interface StreamOptions {
 
 type State = 'open' | 'halfClosed' | 'closed' | 'errored';
 
-function buildMetadata(hints?: Record<string, string>): Metadata {
-  const md = new Metadata();
-  if (hints !== undefined) {
-    for (const [k, v] of Object.entries(hints)) md.set(`x-greptime-hint-${k}`, v);
-  }
-  return md;
-}
-
 export class StreamWriter {
   private readonly call: ClientStreamingCall<GreptimeRequest, GreptimeResponse>;
   private readonly cfg: ClientConfig;
@@ -44,7 +36,7 @@ export class StreamWriter {
   public constructor(channel: Channel, cfg: ClientConfig, opts: StreamOptions | undefined) {
     this.cfg = cfg;
     this.call = clientStreamingCall(channel.unwrap(), HandleRequestsMethod, {
-      metadata: buildMetadata(opts?.hints),
+      metadata: buildHintsMetadata(opts?.hints),
       deadlineMs: opts?.timeoutMs ?? cfg.timeoutMs,
       ...(opts?.signal !== undefined && { signal: opts.signal }),
     });

@@ -9,6 +9,9 @@ import { DataType } from './data-type.js';
 
 const EMPTY_VALUE: Value = create(ValueSchema, { valueData: { case: undefined } });
 
+// Module-level singleton — shared across every binary-typed cell on the unary path.
+const TEXT_ENCODER = /*@__PURE__*/ new TextEncoder();
+
 const MAX_SAFE_INT = Number.MAX_SAFE_INTEGER;
 const MIN_SAFE_INT = Number.MIN_SAFE_INTEGER;
 const I8_MIN = -(2 ** 7);
@@ -72,7 +75,7 @@ function asNumber(name: string, v: unknown): number {
 
 function asBinary(v: unknown): Uint8Array {
   if (v instanceof Uint8Array) return v; // Buffer is-a Uint8Array, passes through
-  if (typeof v === 'string') return new TextEncoder().encode(v);
+  if (typeof v === 'string') return TEXT_ENCODER.encode(v);
   throw new ValueError(`binary expected Uint8Array|Buffer|string, got ${typeof v}`);
 }
 

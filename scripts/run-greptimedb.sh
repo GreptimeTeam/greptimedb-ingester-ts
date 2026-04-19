@@ -4,7 +4,8 @@
 set -euo pipefail
 
 NAME="${GREPTIMEDB_CONTAINER_NAME:-greptimedb-dev}"
-IMAGE="${GREPTIMEDB_IMAGE:-greptime/greptimedb:latest}"
+# Pinned to match CI; override via env if you intentionally want a different version.
+IMAGE="${GREPTIMEDB_IMAGE:-greptime/greptimedb:v1.0.0}"
 
 if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
   echo "Stopping existing $NAME..."

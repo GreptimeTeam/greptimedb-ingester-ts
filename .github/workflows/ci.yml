@@ -46,11 +46,15 @@ jobs:
       # `greptime/greptimedb` image ships an entrypoint that prints help and
       # exits unless a subcommand (`standalone start ...`) is passed. Run the
       # container manually so we can supply the right command.
+      # Server version is pinned. Bumping it is intentional: review the bump in PR
+      # so any server-behavior change shows up as a deliberate diff, not a flaky CI.
       - name: Start GreptimeDB
+        env:
+          GREPTIMEDB_VERSION: v1.0.0
         run: |
           docker run -d --name greptimedb \
             -p 4000:4000 -p 4001:4001 -p 4002:4002 \
-            greptime/greptimedb:latest standalone start \
+            "greptime/greptimedb:${GREPTIMEDB_VERSION}" standalone start \
               --http-addr 0.0.0.0:4000 \
               --rpc-bind-addr 0.0.0.0:4001 \
               --mysql-addr 0.0.0.0:4002

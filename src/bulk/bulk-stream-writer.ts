@@ -19,7 +19,7 @@ import type { Channel } from '../transport/channel.js';
 import { bidiStreamingCall, type BidiStreamingCall } from '../transport/promise-adapter.js';
 import { buildFlightMetadata } from '../auth.js';
 import { validateTableSchema, type TableSchema } from '../table/schema.js';
-import { rowsToArrowTable } from './arrow-encoder.js';
+import { precomputeArrowSchema, rowsToArrowTable, type PrecomputedArrowSchema } from './arrow-encoder.js';
 import {
   buildBatchFlightData,
   buildSchemaFlightData,
@@ -71,6 +71,9 @@ export class BulkStreamWriter {
   private readonly semaphore: Semaphore;
   private readonly schema: TableSchema;
   private readonly schemaArrow: ReturnType<typeof schemaToIpcMessage>;
+  // Hoisted Arrow schema artifacts: built once at construction, reused for every batch.
+  // Without this each `writeRowsAsync` re-allocates the same Schema/Field/type instances.
+  private readonly precomputedArrow: PrecomputedArrowSchema;
   private readonly timeoutMs?: number;
   private readonly groups = new Map<number, FrameGroup>();
   private readonly completed = new Map<number, SettledGroup>();
@@ -100,13 +103,15 @@ export class BulkStreamWriter {
       );
     }
     this.schema = schema;
-    const parallelism = opts?.parallelism ?? 8;
+    // Default parallelism aligned with Rust SDK `src/bulk.rs:129` (4).
+    const parallelism = opts?.parallelism ?? 4;
     this.semaphore = new Semaphore(parallelism);
     if (opts?.timeoutMs !== undefined) this.timeoutMs = opts.timeoutMs;
 
-    // Pre-encode the Arrow schema once — it's reused for every batch's handshake.
-    const arrowSchema = rowsToArrowTable(schema, []).schema;
-    this.schemaArrow = schemaToIpcMessage(arrowSchema);
+    // Pre-compute Arrow schema artifacts (Field[], Type[], Schema) once. Reused both
+    // for the schema handshake frame and for every subsequent `writeRowsAsync` batch.
+    this.precomputedArrow = precomputeArrowSchema(schema);
+    this.schemaArrow = schemaToIpcMessage(this.precomputedArrow.arrowSchema);
 
     this.call = bidiStreamingCall(channel.unwrap(), DoPutMethod, {
       metadata: buildFlightMetadata(cfg),
@@ -182,7 +187,7 @@ export class BulkStreamWriter {
     // Encode first so we know the sub-frame count before allocating ids.
     let batchMessages: ReturnType<typeof encodeTableForFlight>['batchMessages'];
     try {
-      const arrowTable = rowsToArrowTable(this.schema, batch.rows);
+      const arrowTable = rowsToArrowTable(this.schema, batch.rows, this.precomputedArrow);
       ({ batchMessages } = encodeTableForFlight(arrowTable));
     } catch (err) {
       this.semaphore.release();

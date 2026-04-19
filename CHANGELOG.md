@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Audit-driven correctness + performance pass. No public API breaks.
+
+- **Wire format aligned with Rust SDK**: `hints` are now sent as a single `x-greptime-hints: k1=v1,k2=v2` header (matches Rust `database.rs:198-211`) instead of per-key `x-greptime-hint-<k>` headers. The server's `hint_headers.rs:19-37` accepts both forms (per-key as a whitelisted fallback for `auto_create_table`/`ttl`/`append_mode`/`merge_mode`/`physical_table`/`read_preference`), but the single-header form is unrestricted (any key passes through) and matches the canonical client.
+- **Hints validation**: keys/values containing `,` or `=` now throw `ValueError` (the wire format has no escaping; silently mangling them is worse than rejecting).
+- **Default change**: `BulkWriteOptions.parallelism` default 8 → 4, aligned with Rust SDK `bulk.rs:129`.
+- **Perf**: module-level `TextEncoder`/`TextDecoder` singletons in flight-codec, arrow-encoder, value converter (was: `new` per row/frame).
+- **Perf**: shared frozen `EMPTY_METADATA` reused for hint-less calls.
+- **Perf**: `BulkStreamWriter` caches `Schema` / `Field[]` / Arrow type instances across batches; `rowsToArrowTable` accepts pre-computed schema.
+- **Correctness**: `BulkStreamWriter` keeps completed async bulk acks retrievable until `waitForResponse(id)` consumes them; no silent dropping of old request ids.
+
 ## 0.1.0-alpha.0 — 2026-04-19
 
 Initial release.

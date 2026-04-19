@@ -64,7 +64,7 @@ Internal state machine rejects writes after `finish()` / `cancel()`. Not auto-re
 await client.write(buildTable().addRow([...sampleRow]));
 const schema = buildTable().schema();
 
-const bulk = await client.createBulkStreamWriter(schema, { parallelism: 8 });
+const bulk = await client.createBulkStreamWriter(schema, { parallelism: 4 });
 for (const batch of batches) {
   await bulk.writeRows({ kind: 'rows', rows: batch });
 }
