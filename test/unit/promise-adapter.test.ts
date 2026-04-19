@@ -2,7 +2,7 @@
 // to exercise abort, cancel, error propagation, and stream lifecycle — these paths are
 // what previously had zero test coverage and are the most fragile part of the SDK.
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   Server,
   ServerCredentials,
@@ -90,13 +90,22 @@ interface ServerControl {
   bidiResponses: number;
   bidiFail: { code: number; message: string } | undefined;
 }
-const ctrl: ServerControl = {
+const CTRL_DEFAULTS: ServerControl = {
   unaryDelayMs: 0,
   unaryFail: undefined,
   unaryEmpty: false,
   bidiResponses: 1,
   bidiFail: undefined,
 };
+const ctrl: ServerControl = { ...CTRL_DEFAULTS };
+
+// Reset the shared in-process gRPC server control surface before each test so a
+// failing assertion in one case cannot leak mutated state into the next. Fields
+// that individual tests intentionally configure are restored here, not at the
+// tail of each test (where a failure would skip the reset).
+beforeEach(() => {
+  Object.assign(ctrl, CTRL_DEFAULTS);
+});
 
 let server: Server | undefined;
 let address = '';

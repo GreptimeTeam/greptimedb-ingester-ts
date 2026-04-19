@@ -343,9 +343,14 @@ export class BulkStreamWriter {
     if (this.state === 'closed' || this.state === 'errored') return;
     this.state = 'errored';
     this.call.cancel(reason);
+    // Reject all tracked sub-ids. Each group's `.then()` aggregate handler will
+    // observe the rejection asynchronously (next microtask) and move the group
+    // into `completed` via `recordCompleted`. We intentionally do NOT clear
+    // `groups` or `completed` here — doing so would create a race window between
+    // `cancel()` returning and those microtasks settling, during which a caller's
+    // `waitForResponse(userId)` would see neither map and fail with "no pending
+    // response" instead of the real cancellation error.
     this.tracker.rejectAll(reason ?? new BulkError('bulk stream cancelled'));
-    this.groups.clear();
-    this.completed.clear();
   }
 
   private async drainResponses(): Promise<void> {

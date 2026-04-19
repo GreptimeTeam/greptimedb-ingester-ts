@@ -72,4 +72,25 @@ describe('bulk integration', () => {
     ).rejects.toBeInstanceOf(BulkError);
   });
 
+  // Regression: cancel() must not eagerly clear groups/completed before the
+  // tracker rejections propagate. Previously this produced a microtask race
+  // where a synchronous waitForResponse(id) call between cancel() returning
+  // and the reject microtask firing would falsely report "no pending response"
+  // instead of the actual cancellation error.
+  it('waitForResponse after synchronous cancel reports the cancellation error', async () => {
+    const name = `bulk_cancel_race_${Date.now()}`;
+    await client.write(buildTable(name).addRow(['probe', 0, Date.now()]));
+
+    const schema: TableSchema = buildTable(name).schema();
+    const bulk = await client.createBulkStreamWriter(schema, { parallelism: 1 });
+
+    const id = await bulk.writeRowsAsync({ kind: 'rows', rows: [['x', 1, Date.now()]] });
+    // Synchronous cancel + waitForResponse — no await between them.
+    bulk.cancel();
+    const waitP = bulk.waitForResponse(id);
+    await expect(waitP).rejects.toBeInstanceOf(BulkError);
+    await expect(waitP).rejects.not.toMatchObject({
+      message: expect.stringContaining('no pending response'),
+    });
+  });
 });

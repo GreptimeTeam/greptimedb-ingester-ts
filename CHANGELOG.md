@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-Audit-driven correctness + performance pass. No public API breaks.
+Audit-driven correctness + performance pass. **Includes breaking public-API removals** — review before upgrading.
+
+### Breaking
+
+- **Removed `ConfigBuilder.withTokenAuth(token)` and the `token` variant of `AuthConfig`.** The GreptimeDB gRPC frontend explicitly rejects `AuthScheme::Token` (see `src/servers/src/grpc/context_auth.rs`). Exposing it was a footgun. Use basic auth or wait for server-side support.
+- **Removed `AuthError` class.** It was exported but never constructed. gRPC UNAUTHENTICATED / PERMISSION_DENIED already surface as `TransportError` with the appropriate `grpcCode`.
+- **Removed `Table.semantic` static helper.** It was unused and unexported at the index level.
+
+### Fixed / Aligned
 
 - **Wire format aligned with Rust SDK**: `hints` are now sent as a single `x-greptime-hints: k1=v1,k2=v2` header (matches Rust `database.rs:198-211`) instead of per-key `x-greptime-hint-<k>` headers. The server's `hint_headers.rs:19-37` accepts both forms (per-key as a whitelisted fallback for `auto_create_table`/`ttl`/`append_mode`/`merge_mode`/`physical_table`/`read_preference`), but the single-header form is unrestricted (any key passes through) and matches the canonical client.
 - **Hints validation**: keys/values containing `,` or `=` now throw `ValueError` (the wire format has no escaping; silently mangling them is worse than rejecting).

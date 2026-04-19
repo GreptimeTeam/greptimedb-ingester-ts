@@ -48,17 +48,37 @@ function streamErrorToTransport(err: Error): TransportError | TimeoutError {
  * not actually slow the producer.
  */
 function writeWithBackpressure<Req>(
-  call: { write(req: Req, cb: (err?: Error | null) => void): boolean; once(ev: 'drain', cb: () => void): unknown },
+  call: {
+    write(req: Req, cb: (err?: Error | null) => void): boolean;
+    once(ev: 'drain', cb: () => void): unknown;
+    removeListener(ev: 'drain', cb: () => void): unknown;
+  },
   req: Req,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let cbDone = false;
     let drainDone = true;
+    let settled = false;
+    let drainHandler: (() => void) | undefined;
+    const detachDrain = (): void => {
+      if (drainHandler !== undefined) {
+        call.removeListener('drain', drainHandler);
+        drainHandler = undefined;
+      }
+    };
     const tryResolve = (): void => {
-      if (cbDone && drainDone) resolve();
+      if (settled || !cbDone || !drainDone) return;
+      settled = true;
+      detachDrain();
+      resolve();
     };
     const ok = call.write(req, (err?: Error | null) => {
+      if (settled) return;
       if (err) {
+        settled = true;
+        // Remove the pending drain listener so repeated write errors don't
+        // accumulate listeners and keep the call object alive longer than needed.
+        detachDrain();
         reject(streamErrorToTransport(err));
         return;
       }
@@ -67,10 +87,13 @@ function writeWithBackpressure<Req>(
     });
     if (!ok) {
       drainDone = false;
-      call.once('drain', () => {
+      drainHandler = (): void => {
+        if (settled) return;
+        drainHandler = undefined;
         drainDone = true;
         tryResolve();
-      });
+      };
+      call.once('drain', drainHandler);
     }
   });
 }

@@ -40,6 +40,13 @@ import type { TableSchema } from '../table/schema.js';
 const MAX_SAFE_INT = Number.MAX_SAFE_INTEGER;
 const MIN_SAFE_INT = Number.MIN_SAFE_INTEGER;
 
+// Exact 64-bit range bounds. Must match the unary path's `asBigInt` bounds in
+// src/table/value.ts so bulk and unary reject the same out-of-range values.
+const I64_MIN = -(1n << 63n);
+const I64_MAX = (1n << 63n) - 1n;
+const U64_MIN = 0n;
+const U64_MAX = (1n << 64n) - 1n;
+
 // Module-level singleton — shared across every JSON / Binary cell encoded on the bulk
 // path. With wide tables and large batches this avoids ~1 allocation per cell.
 const TEXT_ENCODER = /*@__PURE__*/ new TextEncoder();
@@ -54,6 +61,21 @@ function numberToSafeBigInt(v: number, name: string): bigint {
     );
   }
   return BigInt(v);
+}
+
+function toBoundedBigInt(v: unknown, name: string, min: bigint, max: bigint): bigint {
+  let b: bigint;
+  if (typeof v === 'bigint') {
+    b = v;
+  } else if (typeof v === 'number') {
+    b = numberToSafeBigInt(v, name);
+  } else {
+    throw new ValueError(`${name} expected bigint|number, got ${typeof v}`);
+  }
+  if (b < min || b > max) {
+    throw new ValueError(`${name} value ${b} out of range [${min}, ${max}]`);
+  }
+  return b;
 }
 
 function arrowTypeFor(dt: DataType): ArrowDataType {
@@ -136,8 +158,9 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
   if (v === null || v === undefined) return null;
   switch (dt) {
     case DataType.Int64:
+      return toBoundedBigInt(v, 'Int64', I64_MIN, I64_MAX);
     case DataType.Uint64:
-      return typeof v === 'number' ? numberToSafeBigInt(v, dt) : v;
+      return toBoundedBigInt(v, 'Uint64', U64_MIN, U64_MAX);
     case DataType.Datetime:
       return v instanceof Date
         ? BigInt(v.getTime())
