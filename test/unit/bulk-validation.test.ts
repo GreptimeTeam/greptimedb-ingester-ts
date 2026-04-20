@@ -132,6 +132,25 @@ describe('unary / bulk scalar parity', () => {
     });
   });
 
+  describe('Date / Datetime / Timestamp — invalid Date + bigint bounds parity', () => {
+    const invalid = new Date('not a date');
+    it('rejects invalid Date on Date column with ValueError', () => {
+      expectBothReject(DataType.Date, invalid);
+    });
+    it('rejects invalid Date on Datetime column with ValueError', () => {
+      expectBothReject(DataType.Datetime, invalid);
+    });
+    it('rejects invalid Date on TimestampMillisecond column with ValueError', () => {
+      expectBothReject(DataType.TimestampMillisecond, invalid);
+    });
+    it('rejects Timestamp bigint above 2^63-1', () => {
+      expectBothReject(DataType.TimestampMillisecond, 1n << 63n);
+    });
+    it('rejects Datetime bigint below -2^63', () => {
+      expectBothReject(DataType.Datetime, -(1n << 63n) - 1n);
+    });
+  });
+
   describe('Time* precisions', () => {
     it('enforces 64-bit range on TimeMicrosecond bigint', () => {
       expectBothReject(DataType.TimeMicrosecond, 1n << 65n);

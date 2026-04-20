@@ -106,3 +106,18 @@ export const I64_MIN = -(1n << 63n);
 export const I64_MAX = (1n << 63n) - 1n;
 export const U64_MIN = 0n;
 export const U64_MAX = (1n << 64n) - 1n;
+
+/**
+ * Return `Date.getTime()` as a finite number or throw `ValueError`. A `Date`
+ * constructed from bad input (e.g. `new Date('not a date')`) has `.getTime()`
+ * === NaN, which silently pollutes downstream arithmetic: `BigInt(NaN)` throws
+ * a raw `RangeError`, `Math.floor(NaN / x)` yields NaN, and the Arrow typed
+ * array then stores 0 or NaN. Checking once here keeps unary and bulk in sync.
+ */
+export function dateToMs(d: Date, name: string): number {
+  const ms = d.getTime();
+  if (!Number.isFinite(ms)) {
+    throw new ValueError(`${name} received an invalid Date (getTime() = NaN)`);
+  }
+  return ms;
+}

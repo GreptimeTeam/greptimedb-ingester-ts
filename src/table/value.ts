@@ -16,6 +16,7 @@ import {
   asIntInRange,
   asNumber,
   asString,
+  dateToMs,
   safeStringifyJson,
 } from './validators.js';
 
@@ -33,13 +34,11 @@ const U32_MAX = 2 ** 32 - 1;
 
 function dateToUnixDays(d: Date): number {
   // Date column = days since Unix epoch (1970-01-01 UTC).
-  const ms = d.getTime();
-  if (!Number.isFinite(ms)) throw new ValueError('Date value is invalid (NaN getTime)');
-  return Math.floor(ms / 86_400_000);
+  return Math.floor(dateToMs(d, 'Date') / 86_400_000);
 }
 
 function scaleDateToTimestamp(d: Date, dataType: DataType): bigint {
-  const ms = BigInt(d.getTime());
+  const ms = BigInt(dateToMs(d, 'Timestamp'));
   switch (dataType) {
     case DataType.TimestampSecond:
       return ms / 1000n;
@@ -124,7 +123,9 @@ export function toProtoValue(ts: unknown, dataType: DataType): Value {
       return create(ValueSchema, { valueData: { case: 'dateValue', value: days } });
     }
     case DataType.Datetime: {
-      const b = ts instanceof Date ? BigInt(ts.getTime()) : asBigInt('Datetime', ts, I64_MIN, I64_MAX);
+      const b = ts instanceof Date
+        ? BigInt(dateToMs(ts, 'Datetime'))
+        : asBigInt('Datetime', ts, I64_MIN, I64_MAX);
       return create(ValueSchema, { valueData: { case: 'datetimeValue', value: b } });
     }
     case DataType.TimestampSecond:

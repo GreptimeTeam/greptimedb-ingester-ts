@@ -47,7 +47,7 @@ import {
   asIntInRange,
   asNumber,
   asString,
-  numberToSafeBigInt,
+  dateToMs,
   safeStringifyJson,
 } from '../table/validators.js';
 
@@ -121,8 +121,13 @@ function arrowTypeFor(dt: DataType): ArrowDataType {
 }
 
 function scaleTimestamp(v: unknown, dt: DataType): bigint {
+  // Invariant: unary (`src/table/value.ts`) and bulk must reject the same
+  // timestamp inputs. Date → run through `dateToMs` so an invalid Date (NaN
+  // getTime) surfaces as ValueError rather than a RangeError from BigInt(NaN).
+  // bigint/number → run through `asBigInt` to enforce signed 64-bit bounds so
+  // out-of-range values are caught here, not silently overflowed by Arrow.
   if (v instanceof Date) {
-    const ms = BigInt(v.getTime());
+    const ms = BigInt(dateToMs(v, 'Timestamp'));
     switch (dt) {
       case DataType.TimestampSecond:
         return ms / 1000n;
@@ -136,11 +141,7 @@ function scaleTimestamp(v: unknown, dt: DataType): bigint {
         throw new ValueError(`unexpected timestamp dt ${dt}`);
     }
   }
-  if (typeof v === 'bigint') return v;
-  if (typeof v === 'number') {
-    return numberToSafeBigInt(v, 'timestamp');
-  }
-  throw new ValueError(`timestamp expected number|bigint|Date, got ${typeof v}`);
+  return asBigInt('Timestamp', v, I64_MIN, I64_MAX);
 }
 
 function normalizeValue(v: unknown, dt: DataType): unknown {
@@ -179,11 +180,11 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
       return asBinary(v);
     case DataType.Datetime:
       return v instanceof Date
-        ? BigInt(v.getTime())
+        ? BigInt(dateToMs(v, 'Datetime'))
         : asBigInt('Datetime', v, I64_MIN, I64_MAX);
     case DataType.Date:
       return v instanceof Date
-        ? Math.floor(v.getTime() / 86_400_000)
+        ? Math.floor(dateToMs(v, 'Date') / 86_400_000)
         : asIntInRange('Date', v, I32_MIN, I32_MAX);
     case DataType.TimestampSecond:
     case DataType.TimestampMillisecond:
