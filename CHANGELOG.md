@@ -27,7 +27,6 @@ Audit-driven correctness + performance pass. **Includes breaking public-API remo
 - **Correctness**: `BulkStreamWriter` keeps completed async bulk acks retrievable until `waitForResponse(id)` consumes them; no silent dropping of old request ids.
 - **Correctness**: bulk path now validates all scalar types (Int8/16/32, Uint8/16/32, Float32/64, Bool, String, Time*) before handing values to Arrow builders. Previously bulk silently coerced wrong-typed inputs (e.g. passing a string into an Int8 column produced NaN in the typed array), while unary correctly threw `ValueError`. Validators are shared between the two paths via new `src/table/validators.ts`.
 - **Correctness**: JSON columns now throw `ValueError` (with the `TypeError` as cause) when the value contains a `bigint` field or a circular reference, instead of leaking the raw `TypeError` from `JSON.stringify`.
-- **Correctness**: `ConfigBuilder.build()` now validates endpoints stricter — empty host, empty/non-numeric port, and port out of range (1..65535) all throw `ConfigError`. IPv6 bracketed form (`[::1]:4001`) is accepted and passed through to grpc-js.
 - **Minor perf**: `Table.addRowObject()` no longer rebuilds the column-name `Set` on every call; it's cached once at `freezeSchema()` time.
 
 ## 0.1.0-alpha.0 — 2026-04-19

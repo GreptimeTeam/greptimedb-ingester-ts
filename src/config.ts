@@ -72,44 +72,6 @@ export interface ClientConfig {
 
 const DEFAULT_MAX_MESSAGE_SIZE = 512 * 1024 * 1024;
 
-/**
- * Check that an endpoint string is in a form grpc-js will accept. We stop at the
- * obvious errors users hit (empty host, empty or non-numeric port, out-of-range
- * port); the gRPC layer does its own DNS / connect validation on top. IPv6
- * bracketed form (`[::1]:4001`) is passed through untouched for grpc-js to parse.
- */
-function validateEndpoint(ep: string): void {
-  if (ep.length === 0) {
-    throw new ConfigError('endpoint must not be empty');
-  }
-  if (ep.startsWith('[')) {
-    // IPv6 bracketed form — defer full parsing to grpc-js; just require a closing bracket.
-    if (!ep.includes(']:')) {
-      throw new ConfigError(`endpoint "${ep}" looks like IPv6 but is missing "]:port"`);
-    }
-    return;
-  }
-  const colon = ep.lastIndexOf(':');
-  if (colon <= 0) {
-    throw new ConfigError(`endpoint "${ep}" must be in host:port form`);
-  }
-  const host = ep.slice(0, colon);
-  const portStr = ep.slice(colon + 1);
-  if (host.length === 0) {
-    throw new ConfigError(`endpoint "${ep}" is missing host`);
-  }
-  if (portStr.length === 0) {
-    throw new ConfigError(`endpoint "${ep}" is missing port`);
-  }
-  if (!/^\d+$/.test(portStr)) {
-    throw new ConfigError(`endpoint "${ep}" has non-numeric port "${portStr}"`);
-  }
-  const port = Number(portStr);
-  if (port < 1 || port > 65535) {
-    throw new ConfigError(`endpoint "${ep}" port ${port} out of range [1, 65535]`);
-  }
-}
-
 export class ConfigBuilder {
   private _endpoints: string[] = [];
   private _database = 'public';
@@ -189,7 +151,9 @@ export class ConfigBuilder {
       throw new ConfigError('at least one endpoint is required');
     }
     for (const ep of this._endpoints) {
-      validateEndpoint(ep);
+      if (!ep.includes(':')) {
+        throw new ConfigError(`endpoint "${ep}" must be in host:port form`);
+      }
     }
     if (this._database.length === 0) {
       throw new ConfigError('database name must not be empty');
