@@ -36,47 +36,36 @@ import {
 import { ValueError } from '../errors.js';
 import { DataType } from '../table/data-type.js';
 import type { TableSchema } from '../table/schema.js';
-
-const MAX_SAFE_INT = Number.MAX_SAFE_INTEGER;
-const MIN_SAFE_INT = Number.MIN_SAFE_INTEGER;
-
-// Exact 64-bit range bounds. Must match the unary path's `asBigInt` bounds in
-// src/table/value.ts so bulk and unary reject the same out-of-range values.
-const I64_MIN = -(1n << 63n);
-const I64_MAX = (1n << 63n) - 1n;
-const U64_MIN = 0n;
-const U64_MAX = (1n << 64n) - 1n;
+import {
+  I64_MAX,
+  I64_MIN,
+  U64_MAX,
+  U64_MIN,
+  asBigInt,
+  asBinary,
+  asBoolean,
+  asIntInRange,
+  asNumber,
+  asString,
+  dateToMs,
+  safeStringifyJson,
+} from '../table/validators.js';
 
 // Module-level singleton — shared across every JSON / Binary cell encoded on the bulk
 // path. With wide tables and large batches this avoids ~1 allocation per cell.
 const TEXT_ENCODER = /*@__PURE__*/ new TextEncoder();
 
-function numberToSafeBigInt(v: number, name: string): bigint {
-  if (!Number.isFinite(v) || !Number.isInteger(v)) {
-    throw new ValueError(`${name} expected integer number, got ${v}`);
-  }
-  if (v > MAX_SAFE_INT || v < MIN_SAFE_INT) {
-    throw new ValueError(
-      `${name} received number ${v} outside safe integer range; pass a bigint instead`,
-    );
-  }
-  return BigInt(v);
-}
-
-function toBoundedBigInt(v: unknown, name: string, min: bigint, max: bigint): bigint {
-  let b: bigint;
-  if (typeof v === 'bigint') {
-    b = v;
-  } else if (typeof v === 'number') {
-    b = numberToSafeBigInt(v, name);
-  } else {
-    throw new ValueError(`${name} expected bigint|number, got ${typeof v}`);
-  }
-  if (b < min || b > max) {
-    throw new ValueError(`${name} value ${b} out of range [${min}, ${max}]`);
-  }
-  return b;
-}
+// 32-bit small-int ranges reused for Arrow Int*/Uint* builders. Kept here instead
+// of in the shared validators module because they're bulk-local.
+const I8_MIN = -(2 ** 7);
+const I8_MAX = 2 ** 7 - 1;
+const I16_MIN = -(2 ** 15);
+const I16_MAX = 2 ** 15 - 1;
+const I32_MIN = -(2 ** 31);
+const I32_MAX = 2 ** 31 - 1;
+const U8_MAX = 2 ** 8 - 1;
+const U16_MAX = 2 ** 16 - 1;
+const U32_MAX = 2 ** 32 - 1;
 
 function arrowTypeFor(dt: DataType): ArrowDataType {
   switch (dt) {
@@ -132,8 +121,13 @@ function arrowTypeFor(dt: DataType): ArrowDataType {
 }
 
 function scaleTimestamp(v: unknown, dt: DataType): bigint {
+  // Invariant: unary (`src/table/value.ts`) and bulk must reject the same
+  // timestamp inputs. Date → run through `dateToMs` so an invalid Date (NaN
+  // getTime) surfaces as ValueError rather than a RangeError from BigInt(NaN).
+  // bigint/number → run through `asBigInt` to enforce signed 64-bit bounds so
+  // out-of-range values are caught here, not silently overflowed by Arrow.
   if (v instanceof Date) {
-    const ms = BigInt(v.getTime());
+    const ms = BigInt(dateToMs(v, 'Timestamp'));
     switch (dt) {
       case DataType.TimestampSecond:
         return ms / 1000n;
@@ -147,39 +141,66 @@ function scaleTimestamp(v: unknown, dt: DataType): bigint {
         throw new ValueError(`unexpected timestamp dt ${dt}`);
     }
   }
-  if (typeof v === 'bigint') return v;
-  if (typeof v === 'number') {
-    return numberToSafeBigInt(v, 'timestamp');
-  }
-  throw new ValueError(`timestamp expected number|bigint|Date, got ${typeof v}`);
+  return asBigInt('Timestamp', v, I64_MIN, I64_MAX);
 }
 
 function normalizeValue(v: unknown, dt: DataType): unknown {
   if (v === null || v === undefined) return null;
+  // Every scalar type funnels through the same validators used by the unary path
+  // (`src/table/value.ts`). Keeping validation here — before Arrow builders see
+  // the value — prevents Arrow from silently coercing a wrong-typed value (e.g.
+  // string -> Int8 typed array = NaN) and produces consistent ValueError messages
+  // across the two write paths.
   switch (dt) {
+    case DataType.Int8:
+      return asIntInRange('Int8', v, I8_MIN, I8_MAX);
+    case DataType.Int16:
+      return asIntInRange('Int16', v, I16_MIN, I16_MAX);
+    case DataType.Int32:
+      return asIntInRange('Int32', v, I32_MIN, I32_MAX);
     case DataType.Int64:
-      return toBoundedBigInt(v, 'Int64', I64_MIN, I64_MAX);
+      return asBigInt('Int64', v, I64_MIN, I64_MAX);
+    case DataType.Uint8:
+      return asIntInRange('Uint8', v, 0, U8_MAX);
+    case DataType.Uint16:
+      return asIntInRange('Uint16', v, 0, U16_MAX);
+    case DataType.Uint32:
+      return asIntInRange('Uint32', v, 0, U32_MAX);
     case DataType.Uint64:
-      return toBoundedBigInt(v, 'Uint64', U64_MIN, U64_MAX);
+      return asBigInt('Uint64', v, U64_MIN, U64_MAX);
+    case DataType.Float32:
+      return asNumber('Float32', v);
+    case DataType.Float64:
+      return asNumber('Float64', v);
+    case DataType.Bool:
+      return asBoolean('Bool', v);
+    case DataType.String:
+      return asString('String', v);
+    case DataType.Binary:
+      return asBinary(v);
     case DataType.Datetime:
       return v instanceof Date
-        ? BigInt(v.getTime())
-        : (typeof v === 'number' ? numberToSafeBigInt(v, 'Datetime') : v);
+        ? BigInt(dateToMs(v, 'Datetime'))
+        : asBigInt('Datetime', v, I64_MIN, I64_MAX);
     case DataType.Date:
-      return v instanceof Date ? Math.floor(v.getTime() / 86_400_000) : v;
+      return v instanceof Date
+        ? Math.floor(dateToMs(v, 'Date') / 86_400_000)
+        : asIntInRange('Date', v, I32_MIN, I32_MAX);
     case DataType.TimestampSecond:
     case DataType.TimestampMillisecond:
     case DataType.TimestampMicrosecond:
     case DataType.TimestampNanosecond:
       return scaleTimestamp(v, dt);
+    case DataType.TimeSecond:
+      return asBigInt('TimeSecond', v, I64_MIN, I64_MAX);
+    case DataType.TimeMillisecond:
+      return asBigInt('TimeMillisecond', v, I64_MIN, I64_MAX);
+    case DataType.TimeMicrosecond:
+      return asBigInt('TimeMicrosecond', v, I64_MIN, I64_MAX);
+    case DataType.TimeNanosecond:
+      return asBigInt('TimeNanosecond', v, I64_MIN, I64_MAX);
     case DataType.Json:
-      return TEXT_ENCODER.encode(typeof v === 'string' ? v : JSON.stringify(v));
-    case DataType.Binary:
-      if (v instanceof Uint8Array) return v;
-      if (typeof v === 'string') return TEXT_ENCODER.encode(v);
-      throw new ValueError(`Binary expected Uint8Array|string, got ${typeof v}`);
-    default:
-      return v;
+      return TEXT_ENCODER.encode(safeStringifyJson(v));
   }
 }
 

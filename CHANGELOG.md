@@ -9,6 +9,12 @@ Audit-driven correctness + performance pass. **Includes breaking public-API remo
 - **Removed `ConfigBuilder.withTokenAuth(token)` and the `token` variant of `AuthConfig`.** The GreptimeDB gRPC frontend explicitly rejects `AuthScheme::Token` (see `src/servers/src/grpc/context_auth.rs`). Exposing it was a footgun. Use basic auth or wait for server-side support.
 - **Removed `AuthError` class.** It was exported but never constructed. gRPC UNAUTHENTICATED / PERMISSION_DENIED already surface as `TransportError` with the appropriate `grpcCode`.
 - **Removed `Table.semantic` static helper.** It was unused and unexported at the index level.
+- **`Client.close()` is now terminal**: any subsequent `write` / `writeObject` / `createStreamWriter` / `createBulkStreamWriter` throws `StateError`. Previously, the channel pool silently rebuilt a channel and the call would succeed against a pool the caller asked to stop. `close()` itself remains idempotent (a second call is a no-op).
+
+### Added
+
+- **`StateError` class** (exported from root): raised for "wrong state" calls — using a closed `Client`, writing to a finished `StreamWriter`, etc. Classified as non-retriable alongside `ConfigError` / `SchemaError` / `ValueError`.
+- **Logger is wired up for real**: `cfg.logger` (set via `ConfigBuilder.withLogger`) now receives events at — (a) `debug` per retry attempt with `{attempt, backoffMs, errorKind}`; (b) `error` on bulk schema handshake failure and drain-loop errors; (c) `warn` once on bulk `completed` map LRU-eviction. Previously the logger was stored in config but never invoked.
 
 ### Fixed / Aligned
 
@@ -19,6 +25,9 @@ Audit-driven correctness + performance pass. **Includes breaking public-API remo
 - **Perf**: shared frozen `EMPTY_METADATA` reused for hint-less calls.
 - **Perf**: `BulkStreamWriter` caches `Schema` / `Field[]` / Arrow type instances across batches; `rowsToArrowTable` accepts pre-computed schema.
 - **Correctness**: `BulkStreamWriter` keeps completed async bulk acks retrievable until `waitForResponse(id)` consumes them; no silent dropping of old request ids.
+- **Correctness**: bulk path now validates all scalar types (Int8/16/32, Uint8/16/32, Float32/64, Bool, String, Time*) before handing values to Arrow builders. Previously bulk silently coerced wrong-typed inputs (e.g. passing a string into an Int8 column produced NaN in the typed array), while unary correctly threw `ValueError`. Validators are shared between the two paths via new `src/table/validators.ts`.
+- **Correctness**: JSON columns now throw `ValueError` (with the `TypeError` as cause) when the value contains a `bigint` field or a circular reference, instead of leaking the raw `TypeError` from `JSON.stringify`.
+- **Minor perf**: `Table.addRowObject()` no longer rebuilds the column-name `Set` on every call; it's cached once at `freezeSchema()` time.
 
 ## 0.1.0-alpha.0 — 2026-04-19
 

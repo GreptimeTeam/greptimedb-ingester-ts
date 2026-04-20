@@ -10,7 +10,7 @@ import {
 } from '@grpc/grpc-js';
 
 import type { ClientConfig, GrpcCompression, TlsConfig } from '../config.js';
-import { ConfigError } from '../errors.js';
+import { ConfigError, StateError } from '../errors.js';
 
 function compressionToGrpc(c: GrpcCompression): number {
   switch (c) {
@@ -95,13 +95,17 @@ export class Channel {
   }
 }
 
-/** Connection pool keyed by "host:port". */
+/** Connection pool keyed by "host:port". Terminal after `close()`. */
 export class ChannelPool {
   private readonly channels = new Map<string, Channel>();
+  private _closed = false;
 
   public constructor(private readonly cfg: ClientConfig) {}
 
   public get(endpoint: string): Channel {
+    if (this._closed) {
+      throw new StateError('channel pool is closed');
+    }
     let ch = this.channels.get(endpoint);
     if (!ch) {
       ch = new Channel(endpoint, this.cfg);
@@ -110,9 +114,16 @@ export class ChannelPool {
     return ch;
   }
 
+  /** Idempotent. After the first call, `get()` throws StateError. */
   public close(): void {
+    if (this._closed) return;
+    this._closed = true;
     for (const ch of this.channels.values()) ch.close();
     this.channels.clear();
+  }
+
+  public isClosed(): boolean {
+    return this._closed;
   }
 }
 

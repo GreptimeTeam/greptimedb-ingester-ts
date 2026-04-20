@@ -104,9 +104,11 @@ Client.create('host:port')
   .withKeepAlive(30_000, 10_000)
   .withGrpcCompression('gzip')                     // none | gzip | deflate
   .withRetry({ mode: 'aggressive', maxAttempts: 3 })
-  .withLogger(consoleLogger('info'))
+  .withLogger(consoleLogger('info'))                 // receives retry + bulk events
   .build();
 ```
+
+The logger (optional) is invoked at: `debug` on each retry attempt, `error` on bulk schema handshake failure and drain-loop errors, `warn` once when the bulk `completed`-ack map LRU-evicts. Defaults to a no-op logger.
 
 Auth flows through two transports (by protocol design):
 - Unary / streaming: proto `RequestHeader.authorization`
@@ -118,8 +120,10 @@ The SDK wires both for you — you configure auth once.
 
 Class hierarchy (all extend `IngesterError`):
 
-- `ConfigError`, `SchemaError`, `ValueError` — never retriable
+- `ConfigError`, `SchemaError`, `ValueError`, `StateError` — never retriable
 - `TransportError` (with `.grpcCode`), `ServerError` (with `.statusCode`), `TimeoutError`, `AbortedError`, `BulkError`
+
+`StateError` is thrown when the SDK is used in an invalid state — e.g., calling `client.write()` after `client.close()`, or `streamWriter.write()` after `streamWriter.finish()`. `close()` is idempotent.
 
 Classify with `isRetriable(err, 'aggressive' | 'conservative')`. Default is `aggressive` and mirrors Rust's `is_retriable`: every runtime error except local config/schema/value errors is retriable. `conservative` narrows to transient gRPC codes (`UNAVAILABLE` / `DEADLINE_EXCEEDED` / `RESOURCE_EXHAUSTED` / `ABORTED` / `UNKNOWN`).
 

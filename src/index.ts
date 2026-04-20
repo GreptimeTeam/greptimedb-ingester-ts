@@ -20,6 +20,7 @@ export {
   IngesterError,
   SchemaError,
   ServerError,
+  StateError,
   TimeoutError,
   TransportError,
   ValueError,

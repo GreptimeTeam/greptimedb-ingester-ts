@@ -113,5 +113,13 @@ describe('toProtoValue', () => {
       const v = toProtoValue('{"pre":true}', DataType.Json);
       expect(v.valueData).toEqual({ case: 'stringValue', value: '{"pre":true}' });
     });
+    it('json with bigint field throws ValueError (not native TypeError)', () => {
+      expect(() => toProtoValue({ id: 1n }, DataType.Json)).toThrow(ValueError);
+    });
+    it('json with circular reference throws ValueError (not native TypeError)', () => {
+      const circ: Record<string, unknown> = { name: 'x' };
+      circ.self = circ;
+      expect(() => toProtoValue(circ, DataType.Json)).toThrow(ValueError);
+    });
   });
 });
