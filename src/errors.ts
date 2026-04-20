@@ -37,6 +37,18 @@ export class ValueError extends IngesterError {
   }
 }
 
+/**
+ * Invalid call in the current object state — e.g., using a closed `Client`,
+ * writing to a finished `StreamWriter`, or sending frames after cancel.
+ * NOT retriable.
+ */
+export class StateError extends IngesterError {
+  public readonly kind = 'state' as const;
+  public constructor(message: string, cause?: unknown) {
+    super(message, cause);
+  }
+}
+
 /** gRPC transport-level error. Carries the numeric grpc status code. */
 export class TransportError extends IngesterError {
   public readonly kind = 'transport' as const;
@@ -103,7 +115,12 @@ const CONSERVATIVE_RETRIABLE_GRPC_CODES = new Set<number>([
 ]);
 
 export function isRetriable(err: unknown, mode: RetryMode = 'aggressive'): boolean {
-  if (err instanceof ConfigError || err instanceof SchemaError || err instanceof ValueError) {
+  if (
+    err instanceof ConfigError ||
+    err instanceof SchemaError ||
+    err instanceof ValueError ||
+    err instanceof StateError
+  ) {
     return false;
   }
   if (mode === 'aggressive') {

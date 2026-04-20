@@ -31,6 +31,7 @@ import { Semaphore } from './parallelism.js';
 import { RequestTracker, type BulkWriteResponse } from './request-tracker.js';
 import { BulkCompression } from './compression.js';
 import { createDeferred, type Deferred } from '../internal/deferred.js';
+import { NOOP_LOGGER, type Logger } from '../internal/logger.js';
 
 export interface BulkWriteOptions {
   readonly compression?: BulkCompression;
@@ -65,6 +66,14 @@ type SettledGroup =
   | { readonly ok: true; readonly value: BulkWriteResponse }
   | { readonly ok: false; readonly error: unknown };
 
+/**
+ * Upper bound on the `completed` map. Guards against unbounded memory growth when
+ * callers use `writeRowsAsync` without ever awaiting `waitForResponse(id)`. Oldest
+ * entries are evicted (JS Map preserves insertion order → keys().next().value is
+ * the oldest).
+ */
+const COMPLETED_CAP = 10_000;
+
 export class BulkStreamWriter {
   private readonly call: BidiStreamingCall<FlightData, PutResult>;
   private readonly tracker = new RequestTracker();
@@ -75,6 +84,7 @@ export class BulkStreamWriter {
   // Without this each `writeRowsAsync` re-allocates the same Schema/Field/type instances.
   private readonly precomputedArrow: PrecomputedArrowSchema;
   private readonly timeoutMs?: number;
+  private readonly logger: Logger;
   private readonly groups = new Map<number, FrameGroup>();
   private readonly completed = new Map<number, SettledGroup>();
   private state: State = 'fresh';
@@ -103,6 +113,7 @@ export class BulkStreamWriter {
       );
     }
     this.schema = schema;
+    this.logger = cfg.logger ?? NOOP_LOGGER;
     // Default parallelism aligned with Rust SDK `src/bulk.rs:129` (4).
     const parallelism = opts?.parallelism ?? 4;
     this.semaphore = new Semaphore(parallelism);
@@ -151,6 +162,10 @@ export class BulkStreamWriter {
         this.state = 'ready';
       } catch (err) {
         this.state = 'errored';
+        this.logger.log('error', 'bulk schema handshake failed', {
+          table: this.schema.tableName,
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw new BulkError(
           `schema handshake failed for table "${this.schema.tableName}" ` +
             `(ensure the table exists and schema matches)`,
@@ -198,10 +213,7 @@ export class BulkStreamWriter {
       // Zero-row batch — record a completed synthetic result so waitForResponse(id)
       // resolves cleanly without pinning a live group forever.
       const id = this.tracker.alloc();
-      this.completed.set(id, {
-        ok: true,
-        value: { requestId: id, affectedRows: 0 },
-      });
+      this.recordCompleted(id, { ok: true, value: { requestId: id, affectedRows: 0 } });
       this.semaphore.release();
       return id;
     }
@@ -245,12 +257,12 @@ export class BulkStreamWriter {
     group.deferred.promise.then(
       (value) => {
         this.groups.delete(userId);
-        this.completed.set(userId, { ok: true, value });
+        this.recordCompleted(userId, { ok: true, value });
         this.semaphore.release();
       },
       (err: unknown) => {
         this.groups.delete(userId);
-        this.completed.set(userId, { ok: false, error: err });
+        this.recordCompleted(userId, { ok: false, error: err });
         this.semaphore.release();
       },
     );
@@ -272,6 +284,29 @@ export class BulkStreamWriter {
     }
     this.totalRequests++;
     return userId;
+  }
+
+  /**
+   * Insert a settled ack into `completed`, LRU-evicting the oldest entry if the
+   * map is at `COMPLETED_CAP`. Logs a one-shot warning on the first eviction so
+   * operators can tell a long-running writer is discarding old acks.
+   */
+  private _evictionWarned = false;
+  private recordCompleted(id: number, settled: SettledGroup): void {
+    if (this.completed.size >= COMPLETED_CAP) {
+      const oldest = this.completed.keys().next().value;
+      if (oldest !== undefined) this.completed.delete(oldest);
+      if (!this._evictionWarned) {
+        this._evictionWarned = true;
+        this.logger.log(
+          'warn',
+          `bulk completed-ack map reached cap (${COMPLETED_CAP}); evicting oldest ` +
+            `request_ids. Call waitForResponse(id) on every writeRowsAsync() to drain.`,
+          { table: this.schema.tableName },
+        );
+      }
+    }
+    this.completed.set(id, settled);
   }
 
   public waitForResponse(id: number, opts?: { timeoutMs?: number }): Promise<BulkWriteResponse> {
@@ -369,6 +404,10 @@ export class BulkStreamWriter {
         } catch (err) {
           // Surface malformed responses as BulkError but keep draining — one bad frame
           // shouldn't doom the whole stream.
+          this.logger.log('error', 'bulk drain received malformed response', {
+            table: this.schema.tableName,
+            error: err instanceof Error ? err.message : String(err),
+          });
           this.tracker.rejectAll(
             new BulkError('malformed DoPut response app_metadata', undefined, err),
           );
@@ -377,6 +416,10 @@ export class BulkStreamWriter {
       }
     } catch (err) {
       this.state = 'errored';
+      this.logger.log('error', 'bulk drain loop errored', {
+        table: this.schema.tableName,
+        error: err instanceof Error ? err.message : String(err),
+      });
       const wrapped =
         err instanceof BulkError
           ? err

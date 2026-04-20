@@ -19,6 +19,9 @@ export class Table {
   private readonly _columns: ColumnSpec[] = [];
   private readonly _rows: unknown[][] = [];
   private _frozen = false;
+  // Cached column-name lookup set; populated by freezeSchema(). Avoids rebuilding
+  // a Set on every addRowObject() call once the schema is immutable.
+  private _columnNameSet: Set<string> | undefined;
 
   private constructor(tableName: string) {
     if (tableName.length === 0) throw new SchemaError('table name must not be empty');
@@ -89,7 +92,8 @@ export class Table {
   public addRowObject(row: Readonly<Record<string, unknown>>): this {
     this.freezeSchema();
     const out: unknown[] = new Array(this._columns.length).fill(null) as unknown[];
-    const knownNames = new Set(this._columns.map((c) => c.name));
+    // `freezeSchema()` guarantees `_columnNameSet` is populated.
+    const knownNames = this._columnNameSet!;
     for (const key of Object.keys(row)) {
       if (!knownNames.has(key)) {
         throw new SchemaError(
@@ -141,6 +145,7 @@ export class Table {
     if (this._frozen) return;
     const schema: TableSchema = { tableName: this._tableName, columns: [...this._columns] };
     validateTableSchema(schema);
+    this._columnNameSet = new Set(this._columns.map((c) => c.name));
     this._frozen = true;
   }
 }

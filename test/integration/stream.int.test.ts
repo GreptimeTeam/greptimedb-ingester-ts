@@ -5,7 +5,7 @@
  */
 
 import { afterAll, describe, expect, it } from 'vitest';
-import { Client, DataType, Precision, SchemaError, Table } from '../../src/index.js';
+import { Client, DataType, Precision, StateError, Table } from '../../src/index.js';
 
 const endpoint = process.env.GREPTIMEDB_ENDPOINT ?? 'localhost:4001';
 const httpEndpoint = process.env.GREPTIMEDB_HTTP ?? 'http://127.0.0.1:4000';
@@ -58,12 +58,12 @@ describe('HandleRequests streaming integration', () => {
     await stream.finish();
     await expect(
       stream.write(buildTable(tableName).addRow(['y', 2, Date.now()])),
-    ).rejects.toBeInstanceOf(SchemaError);
+    ).rejects.toBeInstanceOf(StateError);
 
     const stream2 = client.createStreamWriter();
     stream2.cancel();
     await expect(
       stream2.write(buildTable(tableName).addRow(['z', 3, Date.now()])),
-    ).rejects.toBeInstanceOf(SchemaError);
+    ).rejects.toBeInstanceOf(StateError);
   });
 });

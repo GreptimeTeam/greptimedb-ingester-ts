@@ -7,7 +7,7 @@ import { status } from '@grpc/grpc-js';
 
 import { buildHintsMetadata, buildRequestHeader } from '../auth.js';
 import type { ClientConfig } from '../config.js';
-import { SchemaError, ServerError, TransportError } from '../errors.js';
+import { ServerError, StateError, TransportError } from '../errors.js';
 import {
   GreptimeRequestSchema,
   type GreptimeRequest,
@@ -45,7 +45,7 @@ export class StreamWriter {
   /** Enqueue one or more Tables. Rejects if the stream is already half-closed or errored. */
   public async write(tables: Table | readonly Table[]): Promise<void> {
     if (this.state !== 'open') {
-      throw new SchemaError(`cannot write to stream in state "${this.state}"`);
+      throw new StateError(`cannot write to stream in state "${this.state}"`);
     }
     const list: readonly Table[] = Array.isArray(tables) ? tables : [tables as Table];
     const header = buildRequestHeader(this.cfg);
@@ -65,10 +65,10 @@ export class StreamWriter {
   /** Half-close the stream and await the server's final `AffectedRows`. */
   public async finish(): Promise<AffectedRows> {
     if (this.state === 'closed') {
-      throw new SchemaError('stream already closed');
+      throw new StateError('stream already closed');
     }
     if (this.state !== 'open' && this.state !== 'halfClosed') {
-      throw new SchemaError(`cannot finish stream in state "${this.state}"`);
+      throw new StateError(`cannot finish stream in state "${this.state}"`);
     }
     this.state = 'halfClosed';
     let res: GreptimeResponse;

@@ -1,5 +1,6 @@
 import type { RetryPolicy } from '../config.js';
 import { AbortedError, isRetriable } from '../errors.js';
+import { NOOP_LOGGER, type Logger } from '../internal/logger.js';
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -43,6 +44,7 @@ export async function withRetry<T>(
   fn: (attempt: number) => Promise<T>,
   policy: RetryPolicy,
   signal?: AbortSignal,
+  logger: Logger = NOOP_LOGGER,
 ): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < policy.maxAttempts; attempt++) {
@@ -54,6 +56,12 @@ export async function withRetry<T>(
       if (attempt === policy.maxAttempts - 1) break;
       if (!isRetriable(err, policy.mode)) break;
       const backoff = computeBackoffMs(policy, attempt);
+      logger.log('debug', 'withRetry scheduling retry', {
+        attempt: attempt + 1,
+        maxAttempts: policy.maxAttempts,
+        backoffMs: Math.round(backoff),
+        errorKind: (err as { kind?: string } | null)?.kind ?? 'unknown',
+      });
       await sleep(backoff, signal);
     }
   }

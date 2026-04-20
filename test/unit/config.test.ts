@@ -43,6 +43,36 @@ describe('ConfigBuilder', () => {
     expect(() => ConfigBuilder.create('localhost').build()).toThrow(ConfigError);
   });
 
+  it('rejects endpoints with empty host', () => {
+    expect(() => ConfigBuilder.create(':4001').build()).toThrow(ConfigError);
+  });
+
+  it('rejects endpoints with empty port', () => {
+    expect(() => ConfigBuilder.create('localhost:').build()).toThrow(ConfigError);
+  });
+
+  it('rejects endpoints with non-numeric port', () => {
+    expect(() => ConfigBuilder.create('localhost:abc').build()).toThrow(ConfigError);
+  });
+
+  it('rejects endpoints with port out of range', () => {
+    expect(() => ConfigBuilder.create('localhost:0').build()).toThrow(ConfigError);
+    expect(() => ConfigBuilder.create('localhost:65536').build()).toThrow(ConfigError);
+    expect(() => ConfigBuilder.create('localhost:99999').build()).toThrow(ConfigError);
+  });
+
+  it('accepts IPv4:port', () => {
+    expect(() => ConfigBuilder.create('127.0.0.1:4001').build()).not.toThrow();
+  });
+
+  it('accepts IPv6 bracketed form', () => {
+    expect(() => ConfigBuilder.create('[::1]:4001').build()).not.toThrow();
+  });
+
+  it('rejects malformed IPv6 (missing "]:port")', () => {
+    expect(() => ConfigBuilder.create('[::1]').build()).toThrow(ConfigError);
+  });
+
   it('rejects empty database', () => {
     expect(() => ConfigBuilder.create('localhost:4001').withDatabase('').build()).toThrow(
       ConfigError,
