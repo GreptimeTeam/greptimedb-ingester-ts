@@ -1,7 +1,6 @@
 // Logger plumbing: before this round, `ConfigBuilder.withLogger()` was dead —
 // users could configure a Logger but nothing in src/ ever called it. These tests
-// lock down the minimum set of events we promise to log: retry attempts, bulk
-// schema handshake failures, bulk drain loop errors, and the LRU-evict warning.
+// lock down the minimum set of events we currently promise to log on the retry path.
 
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RETRY_POLICY } from '../../src/config.js';
@@ -67,7 +66,7 @@ describe('withRetry logger wiring', () => {
     expect(entries).toHaveLength(0);
   });
 
-  it('does not log when the error is non-retriable (breaks out of loop)', async () => {
+  it('logs stop reason, but no retry scheduling, for non-retriable errors', async () => {
     const { logger, entries } = recordingLogger();
     await expect(
       withRetry(
@@ -77,7 +76,16 @@ describe('withRetry logger wiring', () => {
         logger,
       ),
     ).rejects.toBeInstanceOf(ValueError);
-    // No "scheduling retry" logs — we stopped immediately.
-    expect(entries.filter((e) => e.level === 'debug')).toHaveLength(0);
+    const debugEntries = entries.filter((e) => e.level === 'debug');
+    expect(debugEntries).toHaveLength(1);
+    expect(debugEntries[0]?.msg).toBe('withRetry stopping on non-retriable error');
+    expect(debugEntries[0]?.meta).toEqual(
+      expect.objectContaining({
+        attempt: 1,
+        maxAttempts: 3,
+        errorKind: 'value',
+        mode: 'aggressive',
+      }),
+    );
   });
 });

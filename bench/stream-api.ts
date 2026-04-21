@@ -1,4 +1,9 @@
 // End-to-end streaming-insert benchmark (HandleRequests).
+//
+// Methodology: rows are pre-generated before the timer starts (matches the Go
+// ingestion-benchmark harness). `stream.write()` is async but returns before
+// the server commits; `stream.finish()` inside the timer drains the outstanding
+// ack so `elapsedMs` is end-to-end.
 
 import { Client } from '../src/index.js';
 import { buildSchemaTable, generateBatch } from './log-data-provider.js';
@@ -14,12 +19,18 @@ async function main(): Promise<void> {
   const hist = createLatencyHistogram();
 
   try {
+    // Pre-generate all batches outside the timer.
+    const numBatches = Math.floor(totalRows / batchSize);
+    const allBatches: unknown[][][] = new Array(numBatches);
+    for (let i = 0; i < numBatches; i++) {
+      allBatches[i] = generateBatch(batchSize, i * batchSize);
+    }
+
     const stream = client.createStreamWriter();
     const start = process.hrtime.bigint();
-    for (let i = 0; i < totalRows / batchSize; i++) {
-      const rows = generateBatch(batchSize, i * batchSize);
+    for (let i = 0; i < numBatches; i++) {
       const tbl = buildSchemaTable();
-      for (const r of rows) tbl.addRow(r);
+      for (const r of allBatches[i]!) tbl.addRow(r);
       const t0 = process.hrtime.bigint();
       await stream.write(tbl);
       hist.recordValue(Number(process.hrtime.bigint() - t0) / 1e6);

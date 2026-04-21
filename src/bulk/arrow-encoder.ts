@@ -27,9 +27,12 @@ import {
   Uint64,
   Uint8,
   Utf8,
+  Vector as ArrowVector,
   makeBuilder,
+  makeData,
   type DataType as ArrowDataType,
   type Builder,
+  type Timestamp as ArrowTimestamp,
   type Vector,
 } from 'apache-arrow';
 
@@ -97,8 +100,10 @@ function arrowTypeFor(dt: DataType): ArrowDataType {
       return new Binary();
     case DataType.Date:
       return new Int32(); // Arrow DateDay is Int32 days; server-side expects Int32 here.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- legacy alias kept for interop
     case DataType.Datetime:
-      return new Int64();
+      // Server-side alias of TimestampMicrosecond.
+      return new TimestampMicrosecond();
     case DataType.TimestampSecond:
       return new TimestampSecond();
     case DataType.TimestampMillisecond:
@@ -178,9 +183,11 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
       return asString('String', v);
     case DataType.Binary:
       return asBinary(v);
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- legacy alias kept for interop
     case DataType.Datetime:
+      // Microsecond-resolution: scale Date ms by 1000; bigint/number are us as-is.
       return v instanceof Date
-        ? BigInt(dateToMs(v, 'Datetime'))
+        ? BigInt(dateToMs(v, 'Datetime')) * 1000n
         : asBigInt('Datetime', v, I64_MIN, I64_MAX);
     case DataType.Date:
       return v instanceof Date
@@ -204,12 +211,67 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
   }
 }
 
+// Timestamp* / Datetime are stored server-side as signed int64 in the column's
+// declared unit. apache-arrow 18's `makeBuilder` path assumes the user supplies
+// `number` milliseconds and re-scales inside the setter (e.g.
+// `setTimestampMicrosecond` does `BigInt(value * 1000)`). That loses sub-ms
+// precision for `Microsecond`/`Nanosecond` columns and outright TypeErrors when
+// the input is a bigint. We bypass the builder for these types and stuff exact
+// bigint values into a BigInt64Array via `makeData`, matching what the Rust and
+// Java ingesters emit byte-for-byte.
+function isTimestampFamily(dt: DataType): boolean {
+  return (
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- legacy alias still flows through here
+    dt === DataType.Datetime ||
+    dt === DataType.TimestampSecond ||
+    dt === DataType.TimestampMillisecond ||
+    dt === DataType.TimestampMicrosecond ||
+    dt === DataType.TimestampNanosecond
+  );
+}
+
+function buildTimestampColumn(
+  arrowType: ArrowDataType,
+  dataType: DataType,
+  rows: readonly (readonly unknown[])[],
+  colIdx: number,
+): Vector {
+  const n = rows.length;
+  const values = new BigInt64Array(n);
+  // Validity bitmap: Arrow IPC convention is 1 = valid, 0 = null, one bit per
+  // slot, LSB-first within each byte.
+  const nullBitmap = new Uint8Array(Math.ceil(n / 8));
+  let nullCount = 0;
+  for (let i = 0; i < n; i++) {
+    const raw = rows[i]?.[colIdx];
+    const v = normalizeValue(raw, dataType);
+    if (v === null || v === undefined) {
+      nullCount++;
+      continue;
+    }
+    values[i] = v as bigint;
+    const byteIdx = i >> 3;
+    nullBitmap[byteIdx] = (nullBitmap[byteIdx] ?? 0) | (1 << (i & 7));
+  }
+  const data = makeData({
+    type: arrowType as ArrowTimestamp,
+    length: n,
+    nullCount,
+    data: values,
+    nullBitmap: nullCount > 0 ? nullBitmap : undefined,
+  });
+  return new ArrowVector([data]);
+}
+
 function buildColumnWithType(
   arrowType: ArrowDataType,
   dataType: DataType,
   rows: readonly (readonly unknown[])[],
   colIdx: number,
 ): Vector {
+  if (isTimestampFamily(dataType)) {
+    return buildTimestampColumn(arrowType, dataType, rows, colIdx);
+  }
   const builder: Builder = makeBuilder({ type: arrowType, nullValues: [null, undefined] });
   for (const row of rows) {
     const raw = row[colIdx];

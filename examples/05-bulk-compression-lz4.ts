@@ -1,9 +1,14 @@
 /*
- * Example 05 — request LZ4 body compression on the bulk path.
+ * Example 05 — request LZ4_FRAME body compression on the bulk path.
  *
- * NOTE: v0.1 limitation. apache-arrow JS 18.x does not implement IPC record batch body
- *   compression, so the SDK currently rejects BulkCompression.Lz4 / Zstd with a
- *   ConfigError. This example demonstrates both the intended API and the expected error.
+ * The SDK injects Arrow IPC BodyCompression on every RecordBatch and the server
+ * decompresses transparently via arrow-ipc. LZ4 typically delivers 2–4x bandwidth
+ * savings on repetitive time-series data with negligible CPU cost.
+ *
+ * Requires the optional `lz4-napi` native dependency. It ships prebuilt binaries for
+ * common platforms and is listed in `optionalDependencies`, so `pnpm install` picks it
+ * up automatically on supported hosts. If missing, the SDK throws a ConfigError
+ * pointing you to install it.
  *
  * Run: pnpm example 05-bulk-compression-lz4
  */
@@ -11,7 +16,6 @@
 import {
   BulkCompression,
   Client,
-  ConfigError,
   DataType,
   Precision,
   Table,
@@ -32,25 +36,25 @@ async function main(): Promise<void> {
   const client = new Client(Client.create(endpoint).withDatabase('public').build());
 
   try {
+    // Bootstrap: ensure the table exists with the expected schema.
     await client.write(buildTable().addRow(['probe', 0, Date.now()]));
 
     const schema: TableSchema = buildTable().schema();
-    try {
-      await client.createBulkStreamWriter(schema, { compression: BulkCompression.Lz4 });
-      console.log('unexpected: LZ4 accepted — apache-arrow JS may have added support');
-    } catch (err) {
-      if (err instanceof ConfigError) {
-        console.log('as expected (v0.1 limitation):', err.message);
-      } else {
-        throw err;
-      }
-    }
+    const bulk = await client.createBulkStreamWriter(schema, {
+      compression: BulkCompression.Lz4,
+    });
 
-    // Fall back to None — still delivers six-figure throughput.
-    const bulk = await client.createBulkStreamWriter(schema, { compression: BulkCompression.None });
-    await bulk.writeRows({ kind: 'rows', rows: [['h', 1.5, Date.now()]] });
+    const rows: unknown[][] = [];
+    for (let i = 0; i < 10_000; i++) {
+      rows.push([`host-${i % 16}`, Math.sin(i / 10), Date.now() + i]);
+    }
+    const resp = await bulk.writeRows({ kind: 'rows', rows });
+    console.log(`compressed (lz4) rows acked: ${resp.affectedRows}`);
+
     const summary = await bulk.finish();
-    console.log(`compression-none fallback: ${summary.totalAffectedRows} rows`);
+    console.log(
+      `total requests: ${summary.totalRequests}, total rows: ${summary.totalAffectedRows}`,
+    );
   } finally {
     await client.close();
   }

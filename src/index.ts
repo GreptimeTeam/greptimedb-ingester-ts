@@ -1,4 +1,4 @@
-export const VERSION = '0.1.0-alpha.0';
+export { VERSION } from './version.js';
 
 export { Client } from './client.js';
 
@@ -42,10 +42,22 @@ export type { WriteOptions } from './write/unary.js';
 export type { AffectedRows } from './write/affected-rows.js';
 export { StreamWriter, type StreamOptions } from './write/stream-writer.js';
 
-export { BulkStreamWriter, type BulkWriteOptions, type RowBatch, type BulkFinishSummary } from './bulk/bulk-stream-writer.js';
+export {
+  BulkStreamWriter,
+  type BulkWriteOptions,
+  type RowBatch,
+  type BulkFinishSummary,
+} from './bulk/bulk-stream-writer.js';
 export { BulkCompression } from './bulk/compression.js';
 export type { BulkWriteResponse } from './bulk/request-tracker.js';
 
-export { field, tableName, tag, timestamp, type ColumnOptions, type TimestampOptions } from './decorators/index.js';
+export {
+  field,
+  tableName,
+  tag,
+  timestamp,
+  type ColumnOptions,
+  type TimestampOptions,
+} from './decorators/index.js';
 
 export { consoleLogger, NOOP_LOGGER, type LogLevel, type Logger } from './internal/logger.js';

@@ -108,7 +108,9 @@ export function toProtoValue(ts: unknown, dataType: DataType): Value {
       return create(ValueSchema, { valueData: { case: 'f64Value', value: n } });
     }
     case DataType.Bool: {
-      return create(ValueSchema, { valueData: { case: 'boolValue', value: asBoolean('Bool', ts) } });
+      return create(ValueSchema, {
+        valueData: { case: 'boolValue', value: asBoolean('Bool', ts) },
+      });
     }
     case DataType.String: {
       return create(ValueSchema, {
@@ -119,18 +121,25 @@ export function toProtoValue(ts: unknown, dataType: DataType): Value {
       return create(ValueSchema, { valueData: { case: 'binaryValue', value: asBinary(ts) } });
     }
     case DataType.Date: {
-      const days = ts instanceof Date ? dateToUnixDays(ts) : asIntInRange('Date', ts, I32_MIN, I32_MAX);
+      const days =
+        ts instanceof Date ? dateToUnixDays(ts) : asIntInRange('Date', ts, I32_MIN, I32_MAX);
       return create(ValueSchema, { valueData: { case: 'dateValue', value: days } });
     }
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- legacy alias kept for interop
     case DataType.Datetime: {
-      const b = ts instanceof Date
-        ? BigInt(dateToMs(ts, 'Datetime'))
-        : asBigInt('Datetime', ts, I64_MIN, I64_MAX);
+      // `datetimeValue` is a microsecond timestamp on the wire.
+      const b =
+        ts instanceof Date
+          ? BigInt(dateToMs(ts, 'Datetime')) * 1000n
+          : asBigInt('Datetime', ts, I64_MIN, I64_MAX);
       return create(ValueSchema, { valueData: { case: 'datetimeValue', value: b } });
     }
     case DataType.TimestampSecond:
       return create(ValueSchema, {
-        valueData: { case: 'timestampSecondValue', value: asTimestamp('TimestampSecond', ts, dataType) },
+        valueData: {
+          case: 'timestampSecondValue',
+          value: asTimestamp('TimestampSecond', ts, dataType),
+        },
       });
     case DataType.TimestampMillisecond:
       return create(ValueSchema, {

@@ -1,11 +1,9 @@
 import { ConfigError } from './errors.js';
 import type { Logger } from './internal/logger.js';
+import { VERSION } from './version.js';
 
 /**
- * Authentication for the ingest client. Only `basic` is supported — the GreptimeDB
- * frontend explicitly rejects `AuthScheme::Token` (see
- * https://github.com/GreptimeTeam/greptimedb/blob/main/src/servers/src/grpc/context_auth.rs).
- * Token-based auth will be added when server support lands.
+ * Authentication for the ingest client. Only `basic` is supported right now.
  */
 export interface AuthConfig {
   readonly kind: 'basic';
@@ -30,11 +28,17 @@ export type TlsConfig =
       readonly serverNameOverride?: string;
     };
 
+/**
+ * gRPC keepalive configuration
+ */
 export interface KeepAliveConfig {
   readonly timeMs: number;
   readonly timeoutMs: number;
 }
 
+/**
+ * Retry policy for writing.
+ */
 export interface RetryPolicy {
   readonly maxAttempts: number;
   readonly initialBackoffMs: number;
@@ -70,7 +74,7 @@ export interface ClientConfig {
   readonly retry: RetryPolicy;
 }
 
-const DEFAULT_MAX_MESSAGE_SIZE = 512 * 1024 * 1024;
+const DEFAULT_MAX_MESSAGE_SIZE = 128 * 1024 * 1024;
 
 export class ConfigBuilder {
   private _endpoints: string[] = [];
@@ -82,12 +86,18 @@ export class ConfigBuilder {
   private _maxReceiveMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
   private _maxSendMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
   private _grpcCompression: GrpcCompression = 'none';
-  private _userAgent = `greptime-ingester-ts/0.1.0-alpha.0`;
+  private _userAgent = `greptime-ingester-ts/${VERSION}`;
   private _logger?: Logger;
   private _retry: RetryPolicy = DEFAULT_RETRY_POLICY;
 
+  /** Create a configuration builder with a single endpoint. */
   public static create(endpoint: string): ConfigBuilder {
     return new ConfigBuilder().withEndpoints(endpoint);
+  }
+
+  /** Create a configuration builder with one or more endpoints. */
+  public static createWithEndpoints(...endpoints: string[]): ConfigBuilder {
+    return new ConfigBuilder().withEndpoints(...endpoints);
   }
 
   public withEndpoints(...endpoints: string[]): this {

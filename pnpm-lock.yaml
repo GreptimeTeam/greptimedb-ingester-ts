@@ -17,6 +17,9 @@ importers:
       apache-arrow:
         specifier: ^18.0.0
         version: 18.1.0
+      flatbuffers:
+        specifier: ^24.12.23
+        version: 24.12.23
     optionalDependencies:
       '@mongodb-js/zstd':
         specifier: ^2.0.0

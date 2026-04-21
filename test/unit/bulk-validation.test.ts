@@ -4,6 +4,7 @@
 // Arrow builders (string -> Int typed array coerced to NaN), creating drift
 // between the two write modes.
 
+/* eslint-disable @typescript-eslint/no-deprecated -- test suite exercises the deprecated Datetime alias */
 import { describe, expect, it } from 'vitest';
 import { DataType, Precision, Table, ValueError } from '../../src/index.js';
 import { toProtoValue } from '../../src/table/value.js';
@@ -148,6 +149,25 @@ describe('unary / bulk scalar parity', () => {
     });
     it('rejects Datetime bigint below -2^63', () => {
       expectBothReject(DataType.Datetime, -(1n << 63n) - 1n);
+    });
+    it('Datetime: unary and bulk both scale a Date to microseconds', () => {
+      // Locks unary/bulk unit parity. Read the Arrow vector's underlying
+      // BigInt64 storage directly — avoids apache-arrow .get() return quirks.
+      const d = new Date('2024-01-01T00:00:00Z');
+      const expected = 1_704_067_200_000_000n;
+
+      const unary = toProtoValue(d, DataType.Datetime);
+      expect(unary.valueData).toEqual({ case: 'datetimeValue', value: expected });
+
+      const schema = schemaFor(DataType.Datetime);
+      const pre = precomputeArrowSchema(schema);
+      const arrowTable = rowsToArrowTable(schema, [['t', d, 1n]], pre);
+      const col = arrowTable.getChildAt(1);
+      expect(col).not.toBeNull();
+      // BigInt64Array storage is the source of truth regardless of the Vector
+      // wrapper's .get() signature across arrow versions.
+      const raw = col!.data[0]?.values as BigInt64Array | undefined;
+      expect(raw?.[0]).toBe(expected);
     });
   });
 

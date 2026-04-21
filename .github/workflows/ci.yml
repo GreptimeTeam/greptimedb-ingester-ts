@@ -27,6 +27,7 @@ jobs:
       - run: pnpm codegen:check
       - run: pnpm typecheck
       - run: pnpm lint
+      - run: pnpm format:check
       - run: pnpm test
       - run: pnpm build
 

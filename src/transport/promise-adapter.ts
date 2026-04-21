@@ -50,8 +50,10 @@ function streamErrorToTransport(err: Error): TransportError | TimeoutError {
 function writeWithBackpressure<Req>(
   call: {
     write(req: Req, cb: (err?: Error | null) => void): boolean;
-    once(ev: 'drain', cb: () => void): unknown;
-    removeListener(ev: 'drain', cb: () => void): unknown;
+    once(ev: 'drain' | 'close', cb: () => void): unknown;
+    once(ev: 'error', cb: (err: Error) => void): unknown;
+    removeListener(ev: 'drain' | 'close', cb: () => void): unknown;
+    removeListener(ev: 'error', cb: (err: Error) => void): unknown;
   },
   req: Req,
 ): Promise<void> {
@@ -60,26 +62,50 @@ function writeWithBackpressure<Req>(
     let drainDone = true;
     let settled = false;
     let drainHandler: (() => void) | undefined;
+    let errorHandler: ((err: Error) => void) | undefined;
+    let closeHandler: (() => void) | undefined;
     const detachDrain = (): void => {
       if (drainHandler !== undefined) {
         call.removeListener('drain', drainHandler);
         drainHandler = undefined;
       }
     };
+    const detachTerminal = (): void => {
+      if (errorHandler !== undefined) {
+        call.removeListener('error', errorHandler);
+        errorHandler = undefined;
+      }
+      if (closeHandler !== undefined) {
+        call.removeListener('close', closeHandler);
+        closeHandler = undefined;
+      }
+    };
+    const settleReject = (err: Error): void => {
+      if (settled) return;
+      settled = true;
+      detachDrain();
+      detachTerminal();
+      reject(streamErrorToTransport(err));
+    };
     const tryResolve = (): void => {
       if (settled || !cbDone || !drainDone) return;
       settled = true;
       detachDrain();
+      detachTerminal();
       resolve();
     };
+    errorHandler = (err: Error): void => {
+      settleReject(err);
+    };
+    closeHandler = (): void => {
+      settleReject(new Error('stream closed before write completed'));
+    };
+    call.once('error', errorHandler);
+    call.once('close', closeHandler);
     const ok = call.write(req, (err?: Error | null) => {
       if (settled) return;
       if (err) {
-        settled = true;
-        // Remove the pending drain listener so repeated write errors don't
-        // accumulate listeners and keep the call object alive longer than needed.
-        detachDrain();
-        reject(streamErrorToTransport(err));
+        settleReject(err);
         return;
       }
       cbDone = true;
@@ -231,6 +257,7 @@ export function clientStreamingCall<Req, Res>(
       return finalPromise;
     },
     cancel(_reason?: unknown): void {
+      detach();
       call.cancel();
     },
   };
@@ -362,4 +389,3 @@ export function bidiStreamingCall<Req, Res>(
     },
   };
 }
-

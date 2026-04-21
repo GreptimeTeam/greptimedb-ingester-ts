@@ -22,7 +22,7 @@ describe('bulk normalizeValue — 64-bit range enforcement (matches unary)', () 
     const s = schemaFor(DataType.Int64);
     const pre = precomputeArrowSchema(s);
     expect(() => rowsToArrowTable(s, [['h', 0n, 1_700_000_000_000n]], pre)).not.toThrow();
-    expect(() => rowsToArrowTable(s, [['h', (1n << 62n), 1n]], pre)).not.toThrow();
+    expect(() => rowsToArrowTable(s, [['h', 1n << 62n, 1n]], pre)).not.toThrow();
   });
 
   it('rejects Int64 bigint above 2^63-1', () => {

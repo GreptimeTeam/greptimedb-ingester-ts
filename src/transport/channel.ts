@@ -128,8 +128,9 @@ export class ChannelPool {
 }
 
 /**
- * Random-peer selector. Matches Rust `src/load_balance.rs` — no health probing, gRPC's
+ * Random-peer selector. No health probing, gRPC's
  * own state machine handles reconnection and failover.
+ * TODO(dennis): support a custom load balancer
  */
 export function pickRandom<T>(items: readonly T[]): T {
   if (items.length === 0) {

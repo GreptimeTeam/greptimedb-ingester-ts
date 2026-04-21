@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-deprecated -- test suite exercises the deprecated Datetime alias */
 import { describe, expect, it } from 'vitest';
 import { DataType, ValueError } from '../../src/index.js';
 import { toProtoValue } from '../../src/table/value.js';
@@ -55,7 +56,10 @@ describe('toProtoValue', () => {
 
   describe('bool / string / binary', () => {
     it('encodes Bool', () => {
-      expect(toProtoValue(true, DataType.Bool).valueData).toEqual({ case: 'boolValue', value: true });
+      expect(toProtoValue(true, DataType.Bool).valueData).toEqual({
+        case: 'boolValue',
+        value: true,
+      });
     });
     it('rejects non-boolean for Bool', () => {
       expect(() => toProtoValue(1, DataType.Bool)).toThrow(ValueError);
@@ -97,6 +101,24 @@ describe('toProtoValue', () => {
       const d = new Date(1_700_000_000_000);
       const v = toProtoValue(d, DataType.TimestampSecond);
       expect(v.valueData).toEqual({ case: 'timestampSecondValue', value: 1_700_000_000n });
+    });
+  });
+
+  describe('datetime (alias of TimestampMicrosecond)', () => {
+    it('scales Date to microseconds (not milliseconds)', () => {
+      const d = new Date('2024-01-01T00:00:00Z');
+      const v = toProtoValue(d, DataType.Datetime);
+      expect(v.valueData).toEqual({
+        case: 'datetimeValue',
+        value: 1_704_067_200_000_000n,
+      });
+    });
+    it('passes user-supplied bigint microseconds through unchanged', () => {
+      const v = toProtoValue(1_704_067_200_000_000n, DataType.Datetime);
+      expect(v.valueData).toEqual({
+        case: 'datetimeValue',
+        value: 1_704_067_200_000_000n,
+      });
     });
   });
 
