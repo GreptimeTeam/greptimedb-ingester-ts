@@ -154,9 +154,13 @@ See [docs/divergences.md](./docs/divergences.md) for where the TS SDK intentiona
 
 ## Roadmap
 
-- VECTOR / LIST / STRUCT column types
-- OpenTelemetry metrics + tracing integration
-- Browser transport via gRPC-Web (separate package)
+- Multi-endpoint failover
+  - Pluggable `EndpointSelector` (random / round-robin / health-aware with outlier detection), replacing the current fixed random pick
+  - Retry-time exclusion of already-failed peers so a single dead endpoint cannot burn the entire retry budget
+  - Auto-reconnect wrapper for streaming and bulk writers (re-pick endpoint, rebuild the stream, surface a resumable handle)
+- JSON v2 column type (binary JSON encoding)
+- OpenTelemetry instrumentation of the SDK itself (write latency, retries, bulk/stream state as metrics + spans)
+- Browser build via gRPC-Web in a separate `@greptime/ingester-web` package (unary + streaming only; no bulk)
 
 ## Links
 
