@@ -8,6 +8,9 @@ export interface ColumnSpec {
   readonly precision?: Precision;
 }
 
+/**
+ * The table schema definition
+ */
 export interface TableSchema {
   readonly tableName: string;
   readonly columns: readonly ColumnSpec[];

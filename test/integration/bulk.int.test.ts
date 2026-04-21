@@ -11,7 +11,15 @@
  */
 
 import { afterAll, describe, expect, it } from 'vitest';
-import { BulkError, Client, DataType, Precision, Table, type TableSchema } from '../../src/index.js';
+import {
+  BulkCompression,
+  BulkError,
+  Client,
+  DataType,
+  Precision,
+  Table,
+  type TableSchema,
+} from '../../src/index.js';
 
 const endpoint = process.env.GREPTIMEDB_ENDPOINT ?? 'localhost:4001';
 const client = new Client(Client.create(endpoint).withDatabase('public').build());
@@ -77,6 +85,24 @@ describe('bulk integration', () => {
   // where a synchronous waitForResponse(id) call between cancel() returning
   // and the reject microtask firing would falsely report "no pending response"
   // instead of the actual cancellation error.
+  it('round-trips 1000 rows with LZ4_FRAME body compression', async () => {
+    const name = `bulk_lz4_${Date.now()}`;
+    await client.write(buildTable(name).addRow(['probe', 0, Date.now()]));
+
+    const schema: TableSchema = buildTable(name).schema();
+    const bulk = await client.createBulkStreamWriter(schema, {
+      compression: BulkCompression.Lz4,
+      parallelism: 2,
+    });
+
+    const rows: unknown[][] = [];
+    for (let i = 0; i < 1_000; i++) rows.push([`h-${i % 8}`, Math.random(), Date.now() + i]);
+    const resp = await bulk.writeRows({ kind: 'rows', rows });
+    expect(resp.affectedRows).toBe(1_000);
+    const summary = await bulk.finish();
+    expect(summary.totalAffectedRows).toBe(1_000);
+  });
+
   it('waitForResponse after synchronous cancel reports the cancellation error', async () => {
     const name = `bulk_cancel_race_${Date.now()}`;
     await client.write(buildTable(name).addRow(['probe', 0, Date.now()]));

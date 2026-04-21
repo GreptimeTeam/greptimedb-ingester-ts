@@ -92,8 +92,10 @@ export class Table {
   public addRowObject(row: Readonly<Record<string, unknown>>): this {
     this.freezeSchema();
     const out: unknown[] = new Array(this._columns.length).fill(null) as unknown[];
-    // `freezeSchema()` guarantees `_columnNameSet` is populated.
-    const knownNames = this._columnNameSet!;
+    const knownNames = this._columnNameSet;
+    if (knownNames === undefined) {
+      throw new SchemaError('internal error: frozen schema missing column-name cache');
+    }
     for (const key of Object.keys(row)) {
       if (!knownNames.has(key)) {
         throw new SchemaError(

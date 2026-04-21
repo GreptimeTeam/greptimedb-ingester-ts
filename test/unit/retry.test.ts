@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AbortedError, TransportError } from '../../src/errors.js';
 import { DEFAULT_RETRY_POLICY } from '../../src/config.js';
 import { withRetry } from '../../src/transport/retry.js';
+import type { Logger } from '../../src/internal/logger.js';
 
 describe('withRetry', () => {
   it('returns the first successful result without retrying', async () => {
@@ -72,5 +73,42 @@ describe('withRetry', () => {
       }),
     ).rejects.toBeInstanceOf(TransportError);
     expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it('emits debug logs when retry stops on non-retriable error and on maxAttempts', async () => {
+    const log = vi.fn<Logger['log']>();
+    const logger: Logger = { log };
+
+    const nonRetriable = vi.fn(() => Promise.reject(new Error('not ours')));
+    await expect(
+      withRetry(
+        nonRetriable,
+        { ...DEFAULT_RETRY_POLICY, maxAttempts: 3, initialBackoffMs: 1 },
+        undefined,
+        logger,
+      ),
+    ).rejects.toThrow('not ours');
+    expect(log).toHaveBeenCalledWith(
+      'debug',
+      'withRetry stopping on non-retriable error',
+      expect.objectContaining({ attempt: 1, maxAttempts: 3, mode: 'aggressive' }),
+    );
+
+    log.mockClear();
+
+    const exhausted = vi.fn(() => Promise.reject(new TransportError('still down', 14)));
+    await expect(
+      withRetry(
+        exhausted,
+        { ...DEFAULT_RETRY_POLICY, maxAttempts: 2, initialBackoffMs: 1, maxBackoffMs: 1 },
+        undefined,
+        logger,
+      ),
+    ).rejects.toBeInstanceOf(TransportError);
+    expect(log).toHaveBeenCalledWith(
+      'debug',
+      'withRetry stopping after maxAttempts',
+      expect.objectContaining({ attempt: 2, maxAttempts: 2, errorKind: 'transport' }),
+    );
   });
 });

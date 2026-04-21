@@ -16,6 +16,10 @@ import {
   tableToIPC,
   type Schema as ArrowSchema,
 } from 'apache-arrow';
+import type { Compressor } from './codec-loader.js';
+import type { CompressionType } from 'apache-arrow/fb/compression-type';
+import { BulkCompression } from './compression.js';
+import { compressBatchMessage } from './ipc-compression.js';
 
 const CONTINUATION = 0xffffffff;
 
@@ -24,7 +28,7 @@ const CONTINUATION = 0xffffffff;
 const TEXT_ENCODER = /*@__PURE__*/ new TextEncoder();
 const TEXT_DECODER = /*@__PURE__*/ new TextDecoder();
 
-interface IpcMessage {
+export interface IpcMessage {
   readonly metadata: Uint8Array;
   readonly body: Uint8Array;
 }
@@ -115,7 +119,16 @@ export interface FlightEncodingBundle {
   readonly batchMessages: readonly IpcMessage[];
 }
 
-export function encodeTableForFlight(table: ArrowTable): FlightEncodingBundle {
+export interface EncodeCompressionContext {
+  readonly codec: BulkCompression;
+  readonly fbCodec: CompressionType;
+  readonly compressor: Compressor;
+}
+
+export async function encodeTableForFlight(
+  table: ArrowTable,
+  compression?: EncodeCompressionContext,
+): Promise<FlightEncodingBundle> {
   const ipc = tableToIPC(table, 'stream');
   const messages = splitIpcStream(ipc);
   if (messages.length === 0) {
@@ -123,6 +136,17 @@ export function encodeTableForFlight(table: ArrowTable): FlightEncodingBundle {
   }
   const [schema, ...batches] = messages;
   if (schema === undefined) throw new Error('Arrow IPC missing schema message');
+
+  // Schema messages have no body, so compression is a no-op there. Only RecordBatch
+  // messages need BodyCompression injected.
+  if (compression !== undefined && compression.codec !== BulkCompression.None) {
+    const compressed = await Promise.all(
+      batches.map((msg) =>
+        compressBatchMessage(msg, compression.codec, compression.fbCodec, compression.compressor),
+      ),
+    );
+    return { schemaMessage: schema, batchMessages: compressed };
+  }
   return { schemaMessage: schema, batchMessages: batches };
 }
 

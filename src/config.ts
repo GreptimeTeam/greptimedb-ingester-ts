@@ -2,10 +2,7 @@ import { ConfigError } from './errors.js';
 import type { Logger } from './internal/logger.js';
 
 /**
- * Authentication for the ingest client. Only `basic` is supported — the GreptimeDB
- * frontend explicitly rejects `AuthScheme::Token` (see
- * https://github.com/GreptimeTeam/greptimedb/blob/main/src/servers/src/grpc/context_auth.rs).
- * Token-based auth will be added when server support lands.
+ * Authentication for the ingest client. Only `basic` is supported right now.
  */
 export interface AuthConfig {
   readonly kind: 'basic';
@@ -30,11 +27,17 @@ export type TlsConfig =
       readonly serverNameOverride?: string;
     };
 
+/**
+ * gRPC keepalive configuration
+ */
 export interface KeepAliveConfig {
   readonly timeMs: number;
   readonly timeoutMs: number;
 }
 
+/**
+ * Retry policy for writing.
+ */
 export interface RetryPolicy {
   readonly maxAttempts: number;
   readonly initialBackoffMs: number;
@@ -86,8 +89,22 @@ export class ConfigBuilder {
   private _logger?: Logger;
   private _retry: RetryPolicy = DEFAULT_RETRY_POLICY;
 
+  /**
+   * Create a configuration builder with a single endpoint.
+   * @param endpoint 
+   * @returns 
+   */
   public static create(endpoint: string): ConfigBuilder {
     return new ConfigBuilder().withEndpoints(endpoint);
+  }
+
+    /**
+   * Create a configuration builder with endpoints.
+   * @param endpoint 
+   * @returns 
+   */
+  public static createWithEndpoints(...endpoint: string[]): ConfigBuilder {
+    return new ConfigBuilder().withEndpoints(...endpoint);
   }
 
   public withEndpoints(...endpoints: string[]): this {

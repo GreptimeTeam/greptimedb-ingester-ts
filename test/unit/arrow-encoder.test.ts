@@ -1,5 +1,6 @@
+/* eslint-disable @typescript-eslint/no-deprecated -- test suite exercises the deprecated Datetime alias */
 import { describe, expect, it } from 'vitest';
-import { Binary, Int64, Uint64 } from 'apache-arrow';
+import { Binary, Int64, TimestampMicrosecond, Uint64 } from 'apache-arrow';
 
 import { DataType, Precision, Table, ValueError } from '../../src/index.js';
 import { rowsToArrowTable } from '../../src/bulk/arrow-encoder.js';
@@ -34,6 +35,17 @@ describe('rowsToArrowTable', () => {
       .addRow(['a', Number.MAX_SAFE_INTEGER + 10, 1]);
 
     expect(() => rowsToArrowTable(table.schema(), table.rows())).toThrow(ValueError);
+  });
+
+  it('maps DataType.Datetime to Arrow TimestampMicrosecond (alias)', () => {
+    const table = Table.new('datetime_schema')
+      .addTagColumn('host', DataType.String)
+      .addFieldColumn('when', DataType.Datetime)
+      .addTimestampColumn('ts', Precision.Millisecond)
+      .addRow(['a', new Date('2024-01-01T00:00:00Z'), 1]);
+
+    const arrowTable = rowsToArrowTable(table.schema(), table.rows());
+    expect(arrowTable.schema.fields[1]?.type).toBeInstanceOf(TimestampMicrosecond);
   });
 
   it('uses Arrow 64-bit types for Int64 and Uint64 columns', () => {

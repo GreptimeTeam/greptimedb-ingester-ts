@@ -87,18 +87,33 @@ export function asBinary(v: unknown): Uint8Array {
 
 /**
  * JSON-stringify a value, wrapping the native `TypeError` (bigint/circular) as
- * `ValueError` so the SDK error taxonomy is honored.
+ * `ValueError` so the SDK error taxonomy is honored. Also rejects values that
+ * `JSON.stringify` returns `undefined` for — functions, symbols, and raw
+ * `undefined` — because silently treating those as "no output" sends garbage
+ * downstream: the unary path would set `stringValue = undefined` on the proto,
+ * and the bulk path's `TextEncoder.encode(undefined)` would write the literal
+ * ASCII bytes `"undefined"` into the JSON column. Fail loudly instead.
  */
 export function safeStringifyJson(v: unknown, name = 'Json'): string {
   if (typeof v === 'string') return v;
+  let out: string | undefined;
   try {
-    return JSON.stringify(v);
+    // TS lib.d.ts types JSON.stringify as `: string`, but the runtime returns
+    // `undefined` for top-level function/symbol/undefined. Cast to reflect reality.
+    out = JSON.stringify(v) as string | undefined;
   } catch (err) {
     throw new ValueError(
       `${name} value could not be JSON-serialized: ${err instanceof Error ? err.message : String(err)}`,
       err,
     );
   }
+  if (out === undefined) {
+    throw new ValueError(
+      `${name} value is not JSON-serializable (typeof ${typeof v}); ` +
+        'functions, symbols, and top-level undefined produce no JSON output',
+    );
+  }
+  return out;
 }
 
 /** Common 64-bit range constants. */

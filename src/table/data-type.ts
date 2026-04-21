@@ -19,6 +19,11 @@ export const DataType = {
   String: 'String',
   Binary: 'Binary',
   Date: 'Date',
+  /**
+   * @deprecated Use `TimestampMicrosecond` instead. GreptimeDB v1.0+ rejects
+   * `datetime` at the SQL layer; this type is kept only for interop with tables
+   * created on older servers. Semantically an alias of `TimestampMicrosecond`.
+   */
   Datetime: 'Datetime',
   TimestampSecond: 'TimestampSecond',
   TimestampMillisecond: 'TimestampMillisecond',
@@ -109,6 +114,7 @@ export function toProtoDataType(t: DataType): ColumnDataType {
       return ColumnDataType.BINARY;
     case DataType.Date:
       return ColumnDataType.DATE;
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- switch must still map the legacy enum
     case DataType.Datetime:
       return ColumnDataType.DATETIME;
     case DataType.TimestampSecond:

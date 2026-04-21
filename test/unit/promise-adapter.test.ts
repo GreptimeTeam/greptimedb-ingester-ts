@@ -2,6 +2,7 @@
 // to exercise abort, cancel, error propagation, and stream lifecycle — these paths are
 // what previously had zero test coverage and are the most fragile part of the SDK.
 
+import { EventEmitter } from 'node:events';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   Server,
@@ -53,6 +54,81 @@ const REQ_SER = serializeReq;
 const REQ_DES = deserializeReq;
 const RES_SER = serializeRes;
 const RES_DES = deserializeRes;
+
+type BackpressureOrder = 'callback-first' | 'drain-first';
+
+class FakeClientStreamCall extends EventEmitter {
+  public ended = false;
+  public cancelled = false;
+  private pendingWriteCallback: ((err?: Error | null) => void) | undefined;
+
+  public constructor(private readonly order: BackpressureOrder) {
+    super();
+  }
+
+  public write(_req: TestReq, cb?: (err?: Error | null) => void): boolean {
+    this.pendingWriteCallback = cb;
+    if (this.order === 'callback-first') {
+      queueMicrotask(() => cb?.(null));
+      setTimeout(() => {
+        this.emit('drain');
+      }, 0);
+    } else {
+      queueMicrotask(() => {
+        this.emit('drain');
+      });
+      setTimeout(() => cb?.(null), 0);
+    }
+    return false;
+  }
+
+  public end(): void {
+    this.ended = true;
+  }
+
+  public cancel(): void {
+    this.cancelled = true;
+  }
+
+  public failPendingWrite(message: string): void {
+    const cb = this.pendingWriteCallback;
+    this.pendingWriteCallback = undefined;
+    cb?.(new Error(message));
+  }
+}
+
+function createFakeClientStreamingAdapter(order: BackpressureOrder): {
+  readonly call: FakeClientStreamCall;
+  readonly adapter: ReturnType<typeof clientStreamingCall<TestReq, TestRes>>;
+} {
+  const call = new FakeClientStreamCall(order);
+  const client = {
+    makeClientStreamRequest: () => call,
+  } as unknown as GrpcClient;
+  const adapter = clientStreamingCall(client, CLIENT_STREAM, { metadata: new Metadata() });
+  return { call, adapter };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+}
+
+class CountingAbortSignal {
+  public aborted = false;
+  public addCount = 0;
+  public removeCount = 0;
+  private readonly listeners = new Set<unknown>();
+
+  public addEventListener(_type: 'abort', listener: unknown): void {
+    this.addCount++;
+    this.listeners.add(listener);
+  }
+
+  public removeEventListener(_type: 'abort', listener: unknown): void {
+    this.removeCount++;
+    this.listeners.delete(listener);
+  }
+}
 
 const UNARY: MethodDefinition<TestReq, TestRes> = {
   path: '/test.Service/Unary',
@@ -240,6 +316,68 @@ function newClient(): GrpcClient {
 }
 
 const describeAdapter = bindError === undefined ? describe : describe.skip;
+
+describe('promise-adapter — backpressure helper', () => {
+  it('waits for drain when the write callback fires before drain', async () => {
+    const { adapter } = createFakeClientStreamingAdapter('callback-first');
+    let settled = false;
+    const writePromise = adapter.write({ payload: 'x' }).then(() => {
+      settled = true;
+    });
+
+    await flushMicrotasks();
+    expect(settled).toBe(false);
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    await writePromise;
+    expect(settled).toBe(true);
+  });
+
+  it('waits for the write callback when drain fires before the callback', async () => {
+    const { adapter } = createFakeClientStreamingAdapter('drain-first');
+    let settled = false;
+    const writePromise = adapter.write({ payload: 'x' }).then(() => {
+      settled = true;
+    });
+
+    await flushMicrotasks();
+    expect(settled).toBe(false);
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    await writePromise;
+    expect(settled).toBe(true);
+  });
+
+  it('rejects pending write on stream error and detaches the drain listener', async () => {
+    const { call, adapter } = createFakeClientStreamingAdapter('callback-first');
+    const writePromise = adapter.write({ payload: 'x' });
+
+    expect(call.listenerCount('drain')).toBe(1);
+    call.emit('error', Object.assign(new Error('boom'), { code: status.UNAVAILABLE }));
+
+    await expect(writePromise).rejects.toBeInstanceOf(TransportError);
+    expect(call.listenerCount('drain')).toBe(0);
+  });
+
+  it('removes the AbortSignal listener on manual cancel', () => {
+    const signal = new CountingAbortSignal();
+    const client = {
+      makeClientStreamRequest: () => new FakeClientStreamCall('callback-first'),
+    } as unknown as GrpcClient;
+    const call = clientStreamingCall(client, CLIENT_STREAM, {
+      metadata: new Metadata(),
+      signal: signal as unknown as AbortSignal,
+    });
+
+    expect(signal.addCount).toBe(1);
+    call.cancel();
+    expect(signal.removeCount).toBe(1);
+  });
+});
 
 describeAdapter('promise-adapter — unary', () => {
   it('resolves with the response on success', async () => {

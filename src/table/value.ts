@@ -122,9 +122,11 @@ export function toProtoValue(ts: unknown, dataType: DataType): Value {
       const days = ts instanceof Date ? dateToUnixDays(ts) : asIntInRange('Date', ts, I32_MIN, I32_MAX);
       return create(ValueSchema, { valueData: { case: 'dateValue', value: days } });
     }
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- legacy alias kept for interop
     case DataType.Datetime: {
+      // `datetimeValue` is a microsecond timestamp on the wire.
       const b = ts instanceof Date
-        ? BigInt(dateToMs(ts, 'Datetime'))
+        ? BigInt(dateToMs(ts, 'Datetime')) * 1000n
         : asBigInt('Datetime', ts, I64_MIN, I64_MAX);
       return create(ValueSchema, { valueData: { case: 'datetimeValue', value: b } });
     }

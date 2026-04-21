@@ -53,8 +53,23 @@ export async function withRetry<T>(
       return await fn(attempt);
     } catch (err) {
       lastErr = err;
-      if (attempt === policy.maxAttempts - 1) break;
-      if (!isRetriable(err, policy.mode)) break;
+      if (attempt === policy.maxAttempts - 1) {
+        logger.log('debug', 'withRetry stopping after maxAttempts', {
+          attempt: attempt + 1,
+          maxAttempts: policy.maxAttempts,
+          errorKind: (err as { kind?: string } | null)?.kind ?? 'unknown',
+        });
+        break;
+      }
+      if (!isRetriable(err, policy.mode)) {
+        logger.log('debug', 'withRetry stopping on non-retriable error', {
+          attempt: attempt + 1,
+          maxAttempts: policy.maxAttempts,
+          errorKind: (err as { kind?: string } | null)?.kind ?? 'unknown',
+          mode: policy.mode,
+        });
+        break;
+      }
       const backoff = computeBackoffMs(policy, attempt);
       logger.log('debug', 'withRetry scheduling retry', {
         attempt: attempt + 1,

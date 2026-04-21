@@ -12,7 +12,7 @@
 // no proto RequestHeader on this path.
 
 import type { ClientConfig } from '../config.js';
-import { BulkError, ConfigError } from '../errors.js';
+import { BulkError } from '../errors.js';
 import type { FlightData, PutResult } from '../generated/arrow/flight/Flight_pb.js';
 import { DoPutMethod } from '../transport/grpc-services.js';
 import type { Channel } from '../transport/channel.js';
@@ -26,10 +26,12 @@ import {
   encodeTableForFlight,
   parseDoPutResponse,
   schemaToIpcMessage,
+  type EncodeCompressionContext,
 } from './flight-codec.js';
 import { Semaphore } from './parallelism.js';
 import { RequestTracker, type BulkWriteResponse } from './request-tracker.js';
 import { BulkCompression } from './compression.js';
+import { resolveCompressor } from './ipc-compression.js';
 import { createDeferred, type Deferred } from '../internal/deferred.js';
 import { NOOP_LOGGER, type Logger } from '../internal/logger.js';
 
@@ -66,14 +68,6 @@ type SettledGroup =
   | { readonly ok: true; readonly value: BulkWriteResponse }
   | { readonly ok: false; readonly error: unknown };
 
-/**
- * Upper bound on the `completed` map. Guards against unbounded memory growth when
- * callers use `writeRowsAsync` without ever awaiting `waitForResponse(id)`. Oldest
- * entries are evicted (JS Map preserves insertion order → keys().next().value is
- * the oldest).
- */
-const COMPLETED_CAP = 10_000;
-
 export class BulkStreamWriter {
   private readonly call: BidiStreamingCall<FlightData, PutResult>;
   private readonly tracker = new RequestTracker();
@@ -85,6 +79,8 @@ export class BulkStreamWriter {
   private readonly precomputedArrow: PrecomputedArrowSchema;
   private readonly timeoutMs?: number;
   private readonly logger: Logger;
+  private readonly compressionCodec: BulkCompression;
+  private compressionCtx: EncodeCompressionContext | undefined;
   private readonly groups = new Map<number, FrameGroup>();
   private readonly completed = new Map<number, SettledGroup>();
   private state: State = 'fresh';
@@ -100,18 +96,7 @@ export class BulkStreamWriter {
     opts: BulkWriteOptions | undefined,
   ) {
     validateTableSchema(schema);
-    const compression = opts?.compression ?? BulkCompression.None;
-    if (compression !== BulkCompression.None) {
-      // v0.1 limitation: apache-arrow JS 18.x does not emit LZ4_FRAME / ZSTD body-compression
-      // in IPC records. The server expects Arrow-level body compression (not gRPC transport
-      // compression). A v0.2 follow-up will either upgrade to an Arrow JS release that
-      // supports body compression or implement flatbuffer-level BodyCompression injection
-      // using the `@mongodb-js/zstd` / `lz4-napi` optional deps.
-      throw new ConfigError(
-        `BulkCompression.${compression} is not yet supported in the TS ingester; ` +
-          `use BulkCompression.None for v0.1 (see roadmap)`,
-      );
-    }
+    this.compressionCodec = opts?.compression ?? BulkCompression.None;
     this.schema = schema;
     this.logger = cfg.logger ?? NOOP_LOGGER;
     // Default parallelism aligned with Rust SDK `src/bulk.rs:129` (4).
@@ -138,7 +123,21 @@ export class BulkStreamWriter {
     schema: TableSchema,
     opts: BulkWriteOptions | undefined,
   ): Promise<BulkStreamWriter> {
+    // Resolve the native compressor BEFORE opening the bidi gRPC stream. Loading
+    // `lz4-napi`/`@mongodb-js/zstd` takes ~1s on first use; if we opened the stream
+    // first, the server would see an idle DoPut bidi that hasn't sent a schema yet
+    // and — on GreptimeDB — can stall the first schema-ack. Resolving up front also
+    // surfaces a missing optional dep as ConfigError before any network work happens.
+    const codec = opts?.compression ?? BulkCompression.None;
+    const resolved = await resolveCompressor(codec);
     const w = new BulkStreamWriter(channel, cfg, schema, opts);
+    if (resolved !== null) {
+      w.compressionCtx = {
+        codec: w.compressionCodec,
+        fbCodec: resolved.fbCodec,
+        compressor: resolved.compressor,
+      };
+    }
     await w.handshake();
     return w;
   }
@@ -200,10 +199,10 @@ export class BulkStreamWriter {
     await this.semaphore.acquire();
 
     // Encode first so we know the sub-frame count before allocating ids.
-    let batchMessages: ReturnType<typeof encodeTableForFlight>['batchMessages'];
+    let batchMessages: Awaited<ReturnType<typeof encodeTableForFlight>>['batchMessages'];
     try {
       const arrowTable = rowsToArrowTable(this.schema, batch.rows, this.precomputedArrow);
-      ({ batchMessages } = encodeTableForFlight(arrowTable));
+      ({ batchMessages } = await encodeTableForFlight(arrowTable, this.compressionCtx));
     } catch (err) {
       this.semaphore.release();
       throw err;
@@ -286,26 +285,7 @@ export class BulkStreamWriter {
     return userId;
   }
 
-  /**
-   * Insert a settled ack into `completed`, LRU-evicting the oldest entry if the
-   * map is at `COMPLETED_CAP`. Logs a one-shot warning on the first eviction so
-   * operators can tell a long-running writer is discarding old acks.
-   */
-  private _evictionWarned = false;
   private recordCompleted(id: number, settled: SettledGroup): void {
-    if (this.completed.size >= COMPLETED_CAP) {
-      const oldest = this.completed.keys().next().value;
-      if (oldest !== undefined) this.completed.delete(oldest);
-      if (!this._evictionWarned) {
-        this._evictionWarned = true;
-        this.logger.log(
-          'warn',
-          `bulk completed-ack map reached cap (${COMPLETED_CAP}); evicting oldest ` +
-            `request_ids. Call waitForResponse(id) on every writeRowsAsync() to drain.`,
-          { table: this.schema.tableName },
-        );
-      }
-    }
     this.completed.set(id, settled);
   }
 
@@ -370,6 +350,19 @@ export class BulkStreamWriter {
       );
       this.tracker.rejectAll(err);
       throw err;
+    }
+    // Fire-and-forget detector: acks that completed but were never claimed via
+    // `waitForResponse(id)`. Not an error — the server-side write succeeded — but
+    // signals the caller's drain pattern is leaky and the `completed` map grew
+    // longer than necessary. Logging at `info` keeps this diagnosable without
+    // false-alarming users of the common `writeRows()` (write-and-wait) API.
+    if (this.completed.size > 0) {
+      this.logger.log(
+        'info',
+        `bulk writer finished with ${this.completed.size} unclaimed ack(s); ` +
+          'call waitForResponse(id) on every writeRowsAsync() to drain',
+        { table: this.schema.tableName, unclaimed: this.completed.size },
+      );
     }
     return { totalRequests: this.totalRequests, totalAffectedRows: this.totalAffected };
   }
