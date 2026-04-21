@@ -26,6 +26,20 @@ import { rowsToArrowTable } from '../../src/bulk/arrow-encoder.js';
 import { encodeTableForFlight, type IpcMessage } from '../../src/bulk/flight-codec.js';
 import { resolveCompressor } from '../../src/bulk/ipc-compression.js';
 
+// Deterministic PRNG (mulberry32). Used by the sentinel test so the generated
+// "incompressible" payload is the same on every run — avoids rare flakes where
+// Math.random() output happens to compress below the `-1` threshold.
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function buildSampleTable(): Table {
   return Table.new('compress_unit')
     .addTagColumn('host', DataType.String)
@@ -223,20 +237,22 @@ describe('ipc-compression', () => {
   );
 
   it('emits the -1 sentinel for incompressible buffers', async () => {
-    // Build a table whose string column carries high-entropy pseudo-random data so
+    // Build a table whose string column carries deterministic high-entropy data so
     // that compressed output >= uncompressed output and our code falls back to `-1`
-    // prefix + raw bytes (matches arrow-rs `compression.rs:73`).
+    // prefix + raw bytes (matches arrow-rs `compression.rs:73`). Seed is fixed so
+    // the payload is identical every run — no probabilistic flakes.
     const table = Table.new('incompressible')
       .addTagColumn('host', DataType.String)
       .addFieldColumn('value', DataType.Float64)
       .addTimestampColumn('ts', Precision.Millisecond);
 
+    const rand = mulberry32(0xdeadbeef);
     for (let i = 0; i < 4; i++) {
-      // 256 bytes of pseudo-random text — LZ4 can't compress below ~1.02x for this.
+      // 256 bytes of seeded pseudo-random text — LZ4 can't compress below ~1.02x.
       const s = Array.from({ length: 256 }, () =>
-        String.fromCharCode(33 + Math.floor(Math.random() * 90)),
+        String.fromCharCode(33 + Math.floor(rand() * 90)),
       ).join('');
-      table.addRow([s, Math.random(), 1_700_000_000_000 + i]);
+      table.addRow([s, rand(), 1_700_000_000_000 + i]);
     }
 
     const arrowTable = rowsToArrowTable(table.schema(), table.rows());

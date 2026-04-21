@@ -1,7 +1,8 @@
 // Apples-to-apples comparison bench against the Go ingestion-benchmark's CPU
 // schema (10 columns: 4 string tags + 5 Float64 fields + 1 ms timestamp).
 //
-// Mirrors `/Users/dennis/programming/go/ingestion-benchmark/benchmark/data.go`:
+// Mirrors https://github.com/killme2008/greptimedb-ingestion-benchmark
+// (see `benchmark/data.go`):
 //   - tags: host, region, datacenter, service
 //   - fields: cpu, memory, disk_util, net_in, net_out (all Float64)
 //   - timestamp: ts (ms precision)
