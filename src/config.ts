@@ -89,22 +89,14 @@ export class ConfigBuilder {
   private _logger?: Logger;
   private _retry: RetryPolicy = DEFAULT_RETRY_POLICY;
 
-  /**
-   * Create a configuration builder with a single endpoint.
-   * @param endpoint 
-   * @returns 
-   */
+  /** Create a configuration builder with a single endpoint. */
   public static create(endpoint: string): ConfigBuilder {
     return new ConfigBuilder().withEndpoints(endpoint);
   }
 
-    /**
-   * Create a configuration builder with endpoints.
-   * @param endpoint 
-   * @returns 
-   */
-  public static createWithEndpoints(...endpoint: string[]): ConfigBuilder {
-    return new ConfigBuilder().withEndpoints(...endpoint);
+  /** Create a configuration builder with one or more endpoints. */
+  public static createWithEndpoints(...endpoints: string[]): ConfigBuilder {
+    return new ConfigBuilder().withEndpoints(...endpoints);
   }
 
   public withEndpoints(...endpoints: string[]): this {

@@ -130,7 +130,7 @@ export class ChannelPool {
 /**
  * Random-peer selector. No health probing, gRPC's
  * own state machine handles reconnection and failover.
- * TODO(dennis): supports custom load balancer
+ * TODO(dennis): support a custom load balancer
  */
 export function pickRandom<T>(items: readonly T[]): T {
   if (items.length === 0) {

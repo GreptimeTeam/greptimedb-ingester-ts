@@ -250,7 +250,8 @@ function buildTimestampColumn(
       continue;
     }
     values[i] = v as bigint;
-    nullBitmap[i >> 3]! |= 1 << (i & 7);
+    const byteIdx = i >> 3;
+    nullBitmap[byteIdx] = (nullBitmap[byteIdx] ?? 0) | (1 << (i & 7));
   }
   const data = makeData({
     type: arrowType as ArrowTimestamp,

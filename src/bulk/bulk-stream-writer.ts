@@ -217,13 +217,12 @@ export class BulkStreamWriter {
       return id;
     }
 
-    const subIds = batchMessages.map(() => this.tracker.alloc());
+    // batchMessages.length >= 1 here (zero-row short-circuit handled above), so the
+    // first allocation is the user-visible id and always defined.
+    const userId = this.tracker.alloc();
+    const subIds: number[] = [userId];
+    for (let i = 1; i < batchMessages.length; i++) subIds.push(this.tracker.alloc());
     const subPromises = subIds.map((id) => this.tracker.track(id, this.timeoutMs));
-    const userId = subIds[0];
-    if (userId === undefined) {
-      this.semaphore.release();
-      throw new BulkError('internal error: missing request_id for encoded batch');
-    }
     const group: FrameGroup = {
       userId,
       subIds,

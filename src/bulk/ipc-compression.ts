@@ -118,7 +118,14 @@ function parseRecordBatchMessage(metadata: Uint8Array): ParsedBatch {
   for (let i = 0; i < msg.customMetadataLength(); i++) {
     const kv = msg.customMetadata(i);
     if (kv === null) continue;
-    customMetadata.push({ key: kv.key() ?? '', value: kv.value() ?? '' });
+    const key = kv.key();
+    const value = kv.value();
+    // Surface malformed IPC loudly: silently substituting '' would round-trip as a
+    // legitimate-looking empty-string entry and mask upstream corruption.
+    if (key === null || value === null) {
+      throw new BulkError(`customMetadata[${i}] missing key or value`);
+    }
+    customMetadata.push({ key, value });
   }
 
   return {
@@ -171,9 +178,13 @@ function padTo(n: number, alignment: number): number {
 }
 
 /**
- * Compress one RecordBatch IPC message. Schema messages and zero-buffer batches are
- * returned unchanged (no body → nothing to compress). Throws `BulkError` for
- * unsupported message types (Dictionary/Tensor/...) to avoid silent corruption.
+ * Compress one RecordBatch IPC message. Returns the input unchanged when `codec`
+ * is `BulkCompression.None`; otherwise compresses every buffer and rebuilds the
+ * metadata with `BodyCompression` attached (zero-buffer batches still get the
+ * `BodyCompression` marker — the empty body is a no-op to decompress). Schema
+ * messages are filtered upstream and must not reach this function. Throws
+ * `BulkError` for unsupported message types (Dictionary/Tensor/...) to avoid
+ * silent corruption.
  */
 export async function compressBatchMessage(
   msg: IpcMessage,
