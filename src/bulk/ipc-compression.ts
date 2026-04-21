@@ -35,7 +35,7 @@ import { Message as FbMessage } from 'apache-arrow/fb/message';
 import { MessageHeader } from 'apache-arrow/fb/message-header';
 import { RecordBatch as FbRecordBatch } from 'apache-arrow/fb/record-batch';
 
-import { BulkError } from '../errors.js';
+import { BulkError, ConfigError } from '../errors.js';
 import type { Compressor } from './codec-loader.js';
 import { loadLz4, loadZstd } from './codec-loader.js';
 import { BulkCompression } from './compression.js';
@@ -60,6 +60,18 @@ export async function resolveCompressor(
       return { fbCodec: CompressionType.LZ4_FRAME, compressor: await loadLz4() };
     case BulkCompression.Zstd:
       return { fbCodec: CompressionType.ZSTD, compressor: await loadZstd() };
+    default: {
+      // Plain-JS callers can pass anything through an `any` cast; surface it as a
+      // ConfigError here rather than letting `undefined.fbCodec` throw TypeError
+      // later in BulkStreamWriter.open. The `never` binding also makes adding a
+      // new BulkCompression member a compile-time error at this site.
+      const _exhaustive: never = codec;
+      throw new ConfigError(
+        `unsupported bulk compression: ${String(_exhaustive)} (expected one of: ${Object.values(
+          BulkCompression,
+        ).join(', ')})`,
+      );
+    }
   }
 }
 

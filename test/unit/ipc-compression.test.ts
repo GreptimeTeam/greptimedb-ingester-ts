@@ -289,6 +289,16 @@ describe('ipc-compression', () => {
     expect(rt.numRows).toBe(table.rows().length);
   });
 
+  it('rejects unknown compression values with ConfigError instead of TypeError', async () => {
+    // Plain-JS / any-cast callers can slip past the `BulkCompression` type.
+    // Previously the switch fell through and returned undefined, so the writer
+    // later tripped on `undefined.fbCodec`. Now we surface a typed ConfigError
+    // that names the bad value and the accepted set.
+    await expect(resolveCompressor('gzip' as unknown as BulkCompression)).rejects.toThrowError(
+      /unsupported bulk compression: gzip/,
+    );
+  });
+
   it('passes through zero-length buffers without a prefix (length=0)', async () => {
     // With nullCount=0 arrow-js emits a zero-length validity bitmap for every column
     // (offset=0, length=0). These must stay length=0 in the new region table.

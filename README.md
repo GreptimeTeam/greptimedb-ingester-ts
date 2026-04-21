@@ -132,7 +132,17 @@ Run any of them with `pnpm example <name>` after `./scripts/run-greptimedb.sh` s
 
 ## Performance
 
-Bulk path reaches **~137k rows/s** on local docker with a 22-column log schema (2M rows, batch=5000, default `parallelism=8`). Unary and streaming single-client numbers plus methodology notes: [docs/benchmarking.md](./docs/benchmarking.md).
+Writing to GreptimeDB from Node.js? The bulk path is the fastest option by a wide margin. Median of 3 runs against a local GreptimeDB on an Apple M4 Max, 1M rows with the 4-tag / 5-field CPU schema, default SDK config, `parallelism=8`:
+
+| JS client                                 | batch=1000   | batch=5000   | Relative     |
+| ----------------------------------------- | ------------ | ------------ | ------------ |
+| `@greptime/ingester` (bulk)               | **789k r/s** | **758k r/s** | **baseline** |
+| `@opentelemetry/exporter-logs-otlp-proto` | 679k r/s     | 638k r/s     | 0.85×        |
+| `@influxdata/influxdb-client`             | 494k r/s     | 520k r/s     | 0.66×        |
+
+Same schema, same data generator, same server, same Node.js runtime; each client is driven with its own default configuration. Arrow Flight ships the batch already-columnar so the server skips text/proto parsing and per-attribute column mapping.
+
+On the 22-column log schema the bulk path reaches **~137k rows/s** (2M rows, batch=5000). Unary and streaming numbers, the exact SDK-usage decisions behind each bench, and reproduction commands: [docs/benchmarking.md](./docs/benchmarking.md).
 
 ## Compatibility
 
