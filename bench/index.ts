@@ -11,10 +11,16 @@ const forward = process.argv.slice(3);
 
 if (arg === undefined) {
   console.error(
-    'Usage: pnpm bench <name> [--rows=N --batch-size=N --parallelism=N --endpoint=host:port]',
+    'Usage: pnpm bench <name> [--rows=N --batch-size=N --parallelism=N --num-hosts=N ...]',
   );
   console.error(
     'Available: regular-api, stream-api, bulk-api, cpu-bulk-api, cpu-influxdb, cpu-otel',
+  );
+  console.error(
+    'Network flags vary by bench: gRPC benches take --endpoint=host:port; cpu-influxdb /',
+  );
+  console.error(
+    'cpu-otel take --http-endpoint=URL plus --database / --user / --password. See docs/benchmarking.md.',
   );
   process.exit(2);
 }

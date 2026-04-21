@@ -62,7 +62,7 @@ Today's gap is Arrow JS single-thread encoding (`rowsToArrowTable` = 99% of clie
 
 ## Apples-to-apples: vs InfluxDB JS SDK & OpenTelemetry JS SDK
 
-Three benches share the CPU schema above and write the same pre-generated data through three JS clients, letting us isolate protocol/client overhead from schema effects. Ports are the GreptimeDB defaults: gRPC Bulk on `4001`, InfluxDB v2 and OTLP over HTTP on `4000`.
+Three benches share the CPU schema above and pre-generate datasets with the same shape and cardinality (series layout + ms-stepped timestamps; Float64 values are re-rolled per run via `Math.random()`) through three JS clients, letting us isolate protocol/client overhead from schema effects. Ports are the GreptimeDB defaults: gRPC Bulk on `4001`, InfluxDB v2 and OTLP over HTTP on `4000`.
 
 - `cpu-bulk-api` — our own `@greptime/ingester`, Arrow Flight bulk path. Writes a proper time-series table: 4-tag composite PK + 5 Float64 fields + ms timestamp.
 - `cpu-influxdb` — `@influxdata/influxdb-client` v1.35, line protocol to `/v1/influxdb/api/v2/write`. GreptimeDB serves the InfluxDB v2 API natively; token is `"<user>:<password>"`. Writes the same tag/field shape; server parses LP and maps to the columnar path.
@@ -82,7 +82,7 @@ Takeaways:
 
 - Arrow Flight bulk wins by a comfortable margin: ~1.3× over OTLP and ~1.6× over InfluxDB LP. The advantage is on the server side: rows arrive as a ready-made Arrow columnar batch, no parsing or per-attribute promotion required.
 - OTLP with `greptime_identity` pays for OTLP proto decode + per-attribute column mapping on the server, plus HTTP/1.1 framing. Still beats InfluxDB LP, which pays for text parsing on top of the same column mapping.
-- Row count is verified after each run via `SELECT COUNT(*)` against the per-protocol table.
+- Row counts were spot-checked out-of-band with `SELECT COUNT(*)` on each per-protocol table; the bench scripts themselves do not run the verification query.
 - Even with `greptime_identity`, the OTel and bulk tables aren't strictly identical — the OTel table still carries log-model columns (`ScopeName`, `TraceId`, etc.) and has no `TAG`-marked primary key, so per-series semantics differ. The numbers here measure ingestion throughput only, not query-path parity.
 
 ### SDK usage notes
@@ -120,7 +120,7 @@ pnpm bench bulk-api --rows=2000000 --batch-size=5000 --endpoint=localhost:4001
 
 Available benchmark names: `regular-api`, `stream-api`, `bulk-api`, `cpu-bulk-api`, `cpu-influxdb`, `cpu-otel`. Shared flags:
 
-- `--rows=N` — total rows to push
+- `--rows=N` — target row count; rounded down to a multiple of `--batch-size` (benches send whole batches only)
 - `--batch-size=N` — per-`write()` batch
 - `--parallelism=N` — concurrent in-flight RPCs (bulk / cpu-\* benches; default 8)
 - `--num-hosts=N` — `cpu-*` benches only; cardinality = `N × 5 × 10 × 20` series (default 100 → 100k series; use 1000 for the blog's 1M-series config)
