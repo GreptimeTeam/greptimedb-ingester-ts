@@ -154,10 +154,7 @@ export async function encodeTableForFlight(
  * Build a Flight schema frame. This is sent once, at start of the DoPut stream, to tell
  * the server the table name + Arrow schema. `app_metadata` is JSON with `request_id = 0`.
  */
-export function buildSchemaFlightData(
-  tableName: string,
-  schemaMsg: IpcMessage,
-): FlightData {
+export function buildSchemaFlightData(tableName: string, schemaMsg: IpcMessage): FlightData {
   return create(FlightDataSchema, {
     flightDescriptor: pathDescriptor(tableName),
     dataHeader: schemaMsg.metadata,
@@ -167,10 +164,7 @@ export function buildSchemaFlightData(
 }
 
 /** Build a Flight batch frame. `app_metadata` is JSON with the user-allocated request_id. */
-export function buildBatchFlightData(
-  batchMsg: IpcMessage,
-  requestId: number,
-): FlightData {
+export function buildBatchFlightData(batchMsg: IpcMessage, requestId: number): FlightData {
   return create(FlightDataSchema, {
     dataHeader: batchMsg.metadata,
     dataBody: batchMsg.body,

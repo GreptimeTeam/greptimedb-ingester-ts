@@ -19,11 +19,7 @@ import {
   type ServerUnaryCall,
 } from '@grpc/grpc-js';
 
-import {
-  AbortedError,
-  TimeoutError,
-  TransportError,
-} from '../../src/errors.js';
+import { AbortedError, TimeoutError, TransportError } from '../../src/errors.js';
 import {
   bidiStreamingCall,
   clientStreamingCall,
@@ -248,10 +244,7 @@ await (async () => {
         if (ctrl.unaryDelayMs > 0) setTimeout(reply, ctrl.unaryDelayMs);
         else reply();
       },
-      ClientStream: (
-        call: ServerReadableStream<TestReq, TestRes>,
-        cb: sendUnaryData<TestRes>,
-      ) => {
+      ClientStream: (call: ServerReadableStream<TestReq, TestRes>, cb: sendUnaryData<TestRes>) => {
         let count = 0;
         call.on('data', (req: TestReq) => {
           count += req.payload.length;
@@ -424,10 +417,15 @@ describeAdapter('promise-adapter — unary', () => {
     ctrl.unaryDelayMs = 200;
     const ac = new AbortController();
     const client = newClient();
-    const p = unaryCall(client, UNARY, { payload: 'x' }, {
-      metadata: new Metadata(),
-      signal: ac.signal,
-    });
+    const p = unaryCall(
+      client,
+      UNARY,
+      { payload: 'x' },
+      {
+        metadata: new Metadata(),
+        signal: ac.signal,
+      },
+    );
     setTimeout(() => {
       ac.abort();
     }, 10);
@@ -441,10 +439,15 @@ describeAdapter('promise-adapter — unary', () => {
     const ac = new AbortController();
     const client = newClient();
     for (let i = 0; i < 50; i++) {
-      await unaryCall(client, UNARY, { payload: 'x' }, {
-        metadata: new Metadata(),
-        signal: ac.signal,
-      });
+      await unaryCall(
+        client,
+        UNARY,
+        { payload: 'x' },
+        {
+          metadata: new Metadata(),
+          signal: ac.signal,
+        },
+      );
     }
     // Node tracks listeners on AbortSignal via a private symbol; we observe via the
     // public `eventNames()` if available, otherwise just confirm no crash and aborting

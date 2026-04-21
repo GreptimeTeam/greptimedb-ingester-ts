@@ -19,7 +19,11 @@ import type { Channel } from '../transport/channel.js';
 import { bidiStreamingCall, type BidiStreamingCall } from '../transport/promise-adapter.js';
 import { buildFlightMetadata } from '../auth.js';
 import { validateTableSchema, type TableSchema } from '../table/schema.js';
-import { precomputeArrowSchema, rowsToArrowTable, type PrecomputedArrowSchema } from './arrow-encoder.js';
+import {
+  precomputeArrowSchema,
+  rowsToArrowTable,
+  type PrecomputedArrowSchema,
+} from './arrow-encoder.js';
 import {
   buildBatchFlightData,
   buildSchemaFlightData,
@@ -42,8 +46,10 @@ export interface BulkWriteOptions {
   readonly signal?: AbortSignal;
 }
 
-export type RowBatch =
-  | { readonly kind: 'rows'; readonly rows: readonly (readonly unknown[])[] };
+export interface RowBatch {
+  readonly kind: 'rows';
+  readonly rows: readonly (readonly unknown[])[];
+}
 
 export interface BulkFinishSummary {
   readonly totalRequests: number;
@@ -99,8 +105,7 @@ export class BulkStreamWriter {
     this.compressionCodec = opts?.compression ?? BulkCompression.None;
     this.schema = schema;
     this.logger = cfg.logger ?? NOOP_LOGGER;
-    // Default parallelism aligned with Rust SDK `src/bulk.rs:129` (4).
-    const parallelism = opts?.parallelism ?? 4;
+    const parallelism = opts?.parallelism ?? 8;
     this.semaphore = new Semaphore(parallelism);
     if (opts?.timeoutMs !== undefined) this.timeoutMs = opts.timeoutMs;
 
@@ -138,7 +143,16 @@ export class BulkStreamWriter {
         compressor: resolved.compressor,
       };
     }
-    await w.handshake();
+    try {
+      await w.handshake();
+    } catch (err) {
+      // handshake() marks state='errored' and rejects tracked promises, but the
+      // underlying bidi gRPC stream is still live. The caller never receives `w`
+      // (we rethrow), so nobody can call `cancel()` on it — tear it down here to
+      // avoid leaking the call and its drain loop.
+      w.call.cancel(err);
+      throw err;
+    }
     return w;
   }
 
@@ -188,6 +202,12 @@ export class BulkStreamWriter {
   /**
    * Send one batch and return its request id immediately. Use `waitForResponse(id)` later
    * to collect the ack. Still honors parallelism via the semaphore.
+   *
+   * Contract: every id returned here MUST eventually be consumed by `waitForResponse(id)`.
+   * Completed but unclaimed acks accumulate in an internal map and are never evicted —
+   * leaking a few is harmless, but never claiming them in a long-running stream is a
+   * memory leak. If you don't need fire-and-forget semantics, use `writeRows()` which
+   * waits for you.
    */
   public async writeRowsAsync(batch: RowBatch): Promise<number> {
     if (this.state === 'fresh') await this.handshake();

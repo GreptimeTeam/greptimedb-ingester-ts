@@ -52,7 +52,9 @@ async function main(): Promise<void> {
     console.log(`compressed (lz4) rows acked: ${resp.affectedRows}`);
 
     const summary = await bulk.finish();
-    console.log(`total requests: ${summary.totalRequests}, total rows: ${summary.totalAffectedRows}`);
+    console.log(
+      `total requests: ${summary.totalRequests}, total rows: ${summary.totalAffectedRows}`,
+    );
   } finally {
     await client.close();
   }

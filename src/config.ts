@@ -1,5 +1,6 @@
 import { ConfigError } from './errors.js';
 import type { Logger } from './internal/logger.js';
+import { VERSION } from './version.js';
 
 /**
  * Authentication for the ingest client. Only `basic` is supported right now.
@@ -73,7 +74,7 @@ export interface ClientConfig {
   readonly retry: RetryPolicy;
 }
 
-const DEFAULT_MAX_MESSAGE_SIZE = 512 * 1024 * 1024;
+const DEFAULT_MAX_MESSAGE_SIZE = 128 * 1024 * 1024;
 
 export class ConfigBuilder {
   private _endpoints: string[] = [];
@@ -85,7 +86,7 @@ export class ConfigBuilder {
   private _maxReceiveMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
   private _maxSendMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
   private _grpcCompression: GrpcCompression = 'none';
-  private _userAgent = `greptime-ingester-ts/0.1.0-alpha.0`;
+  private _userAgent = `greptime-ingester-ts/${VERSION}`;
   private _logger?: Logger;
   private _retry: RetryPolicy = DEFAULT_RETRY_POLICY;
 

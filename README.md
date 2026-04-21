@@ -1,17 +1,26 @@
 # @greptime/ingester
 
+[![npm](https://img.shields.io/npm/v/@greptime/ingester.svg)](https://www.npmjs.com/package/@greptime/ingester)
+[![CI](https://github.com/GreptimeTeam/greptimedb-ingester-ts/actions/workflows/ci.yml/badge.svg)](https://github.com/GreptimeTeam/greptimedb-ingester-ts/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](./package.json)
+
 Official TypeScript ingester SDK for [GreptimeDB](https://github.com/GreptimeTeam/greptimedb). gRPC row inserts, streaming inserts, and Arrow Flight bulk writes in one package.
 
-- Node.js **≥ 20**, dual ESM + CJS
-- Strict TypeScript (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`)
-- TS 5 Stage-3 decorators (no `reflect-metadata`)
-- `@bufbuild/protobuf` 2.x + `@grpc/grpc-js` 1.x + `apache-arrow` 18.x
+## Features
+
+- Three write modes on one `Client`: unary, streaming, and Arrow Flight bulk with LZ4 / ZSTD body compression
+- Stage-3 decorators (TS 5) for object mapping — no `reflect-metadata`
+- TLS (system / PEM / file), basic auth, gzip transport compression, random-peer load balancing
+- Configurable retry (`aggressive` / `conservative`) with full-jitter exponential backoff + `AbortSignal`
+- Dual ESM + CJS, strict TypeScript, Node.js ≥ 20
 
 ## Install
 
 ```bash
 pnpm add @greptime/ingester
-# or npm install @greptime/ingester
+# or: npm install @greptime/ingester
+# or: yarn add @greptime/ingester
 ```
 
 ## Quickstart
@@ -19,9 +28,7 @@ pnpm add @greptime/ingester
 ```ts
 import { Client, DataType, Precision, Table } from '@greptime/ingester';
 
-const client = new Client(
-  Client.create('localhost:4001').withDatabase('public').build(),
-);
+const client = new Client(Client.create('localhost:4001').withDatabase('public').build());
 
 const table = Table.new('cpu_usage')
   .addTagColumn('host', DataType.String)
@@ -36,17 +43,13 @@ await client.close();
 
 ## Three write modes
 
-| Mode | API | When |
-|---|---|---|
-| Unary | `client.write(tables)` | &lt;1k rows/s, mixed schemas, supports auto-create table |
-| Streaming | `client.createStreamWriter()` | Sustained writes on a single connection |
-| Bulk | `client.createBulkStreamWriter(schema)` | &gt;10k rows/s, Arrow Flight DoPut with parallelism |
+| Mode      | API                                     | When                                                     |
+| --------- | --------------------------------------- | -------------------------------------------------------- |
+| Unary     | `client.write(tables)`                  | &lt;1k rows/s, mixed schemas, supports auto-create table |
+| Streaming | `client.createStreamWriter()`           | Sustained writes on a single connection                  |
+| Bulk      | `client.createBulkStreamWriter(schema)` | &gt;10k rows/s, Arrow Flight DoPut with parallelism      |
 
-### Unary
-
-Retriable (policy configurable via `ConfigBuilder.withRetry`). Supports `AbortSignal`, `timeoutMs`, and custom hints.
-
-### Streaming (`HandleRequests`)
+### Streaming
 
 ```ts
 const stream = client.createStreamWriter();
@@ -54,28 +57,29 @@ for (const batch of batches) await stream.write(batch);
 const { value } = await stream.finish();
 ```
 
-Internal state machine rejects writes after `finish()` / `cancel()`. Not auto-retried — the caller rebuilds the stream on error.
+The stream is not auto-retried — rebuild it on error.
 
-### Bulk (Arrow Flight `DoPut`)
+### Bulk
 
 ```ts
-// Prerequisite: the table must already exist with the exact schema.
-// Idiomatic bootstrap — one unary write (which auto-creates), then bulk:
+// Prerequisite: the table exists with this schema. One unary write auto-creates it.
 await client.write(buildTable().addRow([...sampleRow]));
 const schema = buildTable().schema();
 
-const bulk = await client.createBulkStreamWriter(schema, { parallelism: 4 });
+const bulk = await client.createBulkStreamWriter(schema);
 for (const batch of batches) {
   await bulk.writeRows({ kind: 'rows', rows: batch });
 }
 const { totalAffectedRows } = await bulk.finish();
 ```
 
-Bulk runs a bidirectional Flight stream. The first frame carries the Arrow schema + `FlightDescriptor.PATH = [table]`; subsequent frames carry RecordBatches with `app_metadata = {"request_id": N}` (JSON). Server responses are demultiplexed by `request_id` and can arrive out of order.
+For LZ4 / ZSTD body compression, pass `{ compression: BulkCompression.Lz4 }`. See [`examples/05-bulk-compression-lz4.ts`](./examples/05-bulk-compression-lz4.ts).
 
-## Decorator API (object mapper)
+For fire-and-forget, use `writeRowsAsync(batch)` — it returns the request id and lets you submit the next batch immediately. **Every id must be claimed with `waitForResponse(id)` before `finish()`**; unclaimed acks accumulate in an internal map and are not auto-evicted, so skipping the claim in a long-running stream leaks memory. `writeRows(batch)` does the claim for you.
 
-Stage-3 decorators (TS 5). `experimentalDecorators` must stay **off** in your tsconfig.
+## Decorator API
+
+Stage-3 decorators. Keep `experimentalDecorators` **off** in your tsconfig.
 
 ```ts
 import { Client, DataType, Precision, field, tableName, tag, timestamp } from '@greptime/ingester';
@@ -92,106 +96,66 @@ await client.writeObject([
 ]);
 ```
 
-## Configuration reference
+## Configuration
 
 ```ts
 Client.create('host:port')
-  .withEndpoints('host2:port', 'host3:port')       // random-peer LB (matches Rust)
   .withDatabase('public')
-  .withBasicAuth('admin', 'pw')                    // basic only — server rejects token auth
-  .withTls({ kind: 'system' })                     // system | pem | file
-  .withTimeout(60_000)
-  .withKeepAlive(30_000, 10_000)
-  .withGrpcCompression('gzip')                     // none | gzip | deflate
+  .withBasicAuth('user', 'pw')
+  .withTls({ kind: 'system' })
   .withRetry({ mode: 'aggressive', maxAttempts: 3 })
-  .withLogger(consoleLogger('info'))                 // receives retry + bulk events
   .build();
 ```
 
-The logger (optional) is invoked at: `debug` on each retry attempt, `error` on bulk schema handshake failure and drain-loop errors, `warn` once when the bulk `completed`-ack map LRU-evicts. Defaults to a no-op logger.
-
-Auth flows through two transports (by protocol design):
-- Unary / streaming: proto `RequestHeader.authorization`
-- Bulk: gRPC metadata `x-greptime-auth` + `x-greptime-db-name`
-
-The SDK wires both for you — you configure auth once.
+Full reference: [docs/configuration.md](./docs/configuration.md).
 
 ## Errors
 
-Class hierarchy (all extend `IngesterError`):
+All errors extend `IngesterError`. Non-retriable: `ConfigError`, `SchemaError`, `ValueError`, `StateError`. Retriable or case-by-case: `TransportError` (`.grpcCode`), `ServerError` (`.statusCode`), `TimeoutError`, `AbortedError`, `BulkError`.
 
-- `ConfigError`, `SchemaError`, `ValueError`, `StateError` — never retriable
-- `TransportError` (with `.grpcCode`), `ServerError` (with `.statusCode`), `TimeoutError`, `AbortedError`, `BulkError`
-
-`StateError` is thrown when the SDK is used in an invalid state — e.g., calling `client.write()` after `client.close()`, or `streamWriter.write()` after `streamWriter.finish()`. `close()` is idempotent.
-
-Classify with `isRetriable(err, 'aggressive' | 'conservative')`. Default is `aggressive` and mirrors Rust's `is_retriable`: every runtime error except local config/schema/value errors is retriable. `conservative` narrows to transient gRPC codes (`UNAVAILABLE` / `DEADLINE_EXCEEDED` / `RESOURCE_EXHAUSTED` / `ABORTED` / `UNKNOWN`).
-
-## Performance
-
-22-column synthetic log schema against local GreptimeDB docker (`greptime/greptimedb:v1.0.0`, Apple M-series):
-
-| Bench | Setup | Throughput | p50 | p95 | p99 |
-|---|---|---|---|---|---|
-| unary | 20k rows, batch=1000 | 26k rows/s | 34ms | 41ms | 65ms |
-| streaming | 100k rows, batch=1000 | 33k rows/s | 26ms | 37ms | 46ms |
-| bulk | 200k rows, batch=5000, parallelism=8 | **141k rows/s** | 26ms | 31ms | 42ms |
-
-Run against your own deployment:
-```bash
-pnpm bench bulk-api --rows=2000000 --batch-size=5000 --parallelism=8 --endpoint=greptime:4001
-```
-
-## Intentional divergences from Rust/Go
-
-| | Rust/Go | TS | Why |
-|---|---|---|---|
-| gRPC transport compression | ZSTD | gzip | `@grpc/grpc-js` does not ship a ZSTD codec |
-| Bulk body compression | LZ4 / ZSTD | None (v0.1) | apache-arrow JS 18.x does not emit IPC body-compression; planned v0.2 |
-| DoPut metadata encoding | `serde_json` (i64) | `JSON.stringify` (number) | JS has no native BigInt JSON; request_id &lt; 2^53 is always enough |
-| Retry policy | single default | `aggressive` (default, matches Rust) + `conservative` knob | TS ecosystem convention |
+Classify with `isRetriable(err, 'aggressive' | 'conservative')`. Default is `aggressive` and mirrors the Rust SDK; `conservative` narrows to transient gRPC codes only.
 
 ## Examples
 
-| File | What |
-|---|---|
-| `examples/01-simple-insert.ts` | Table builder → `client.write` |
-| `examples/02-insert-object-decorators.ts` | `@tableName`/`@tag`/`@field`/`@timestamp` + `writeObject` |
-| `examples/03-stream-insert.ts` | `StreamWriter` with 10k rows |
-| `examples/04-bulk-insert.ts` | Unary bootstrap → bulk 100k rows |
-| `examples/05-bulk-compression-lz4.ts` | Shows the v0.1 `ConfigError` for LZ4 |
-| `examples/06-auth-and-tls.ts` | Basic auth + TLS config |
-| `examples/07-multi-endpoint-lb.ts` | Multiple endpoints, random LB |
-| `examples/08-abort-and-retry.ts` | `AbortSignal` + conservative retry |
+| File                                      | What                                                            |
+| ----------------------------------------- | --------------------------------------------------------------- |
+| `examples/01-simple-insert.ts`            | Table builder → `client.write`                                  |
+| `examples/02-insert-object-decorators.ts` | `@tableName` / `@tag` / `@field` / `@timestamp` + `writeObject` |
+| `examples/03-stream-insert.ts`            | `StreamWriter` with 10k rows                                    |
+| `examples/04-bulk-insert.ts`              | Unary bootstrap → bulk 100k rows                                |
+| `examples/05-bulk-compression-lz4.ts`     | LZ4 frame compression on the bulk path                          |
+| `examples/06-auth-and-tls.ts`             | Basic auth + TLS config                                         |
+| `examples/07-multi-endpoint-lb.ts`        | Multiple endpoints, random LB                                   |
+| `examples/08-abort-and-retry.ts`          | `AbortSignal` + conservative retry                              |
 
-Each is runnable as `pnpm example <name>` after `./scripts/run-greptimedb.sh` starts a local server.
+Run any of them with `pnpm example <name>` after `./scripts/run-greptimedb.sh` starts a local server.
+
+## Performance
+
+Bulk path reaches **~141k rows/s** on local docker with a 22-column log schema at `parallelism=8`. Full numbers and how to reproduce: [docs/benchmarking.md](./docs/benchmarking.md).
 
 ## Compatibility
 
 - Tested: Node.js 22.x + GreptimeDB 1.0.0 / latest.
 - Node.js 20.x: supported (minimum).
-- Bun / Deno (node-compat): best-effort. `@grpc/grpc-js` and `apache-arrow` both ship — not CI-gated.
+- Bun / Deno (node-compat): best-effort, not CI-gated.
+
+See [docs/divergences.md](./docs/divergences.md) for where the TS SDK intentionally differs from the Rust / Go SDKs.
 
 ## Roadmap
 
-- LZ4 / ZSTD IPC body compression (pending Arrow JS support or flatbuffer-level fallback via `lz4-napi` / `@mongodb-js/zstd`)
 - VECTOR / LIST / STRUCT column types
 - OpenTelemetry metrics + tracing integration
 - Browser transport via gRPC-Web (separate package)
 
-## Contributing
+## Links
 
-```bash
-pnpm install
-./scripts/vendor-proto.sh     # refresh proto from ../rust/greptime-proto
-pnpm codegen                   # regenerate src/generated/
-pnpm typecheck && pnpm lint && pnpm test
-./scripts/run-greptimedb.sh    # local docker
-pnpm example 01-simple-insert  # smoke-test
-```
-
-Integration tests: `INTEGRATION=1 pnpm test:integration` (requires docker / testcontainers).
+- [Documentation](./docs/) — configuration, benchmarking, divergences
+- [Contributing](./CONTRIBUTING.md)
+- [Security policy](./SECURITY.md)
+- [Changelog](./CHANGELOG.md)
+- [Issues](https://github.com/GreptimeTeam/greptimedb-ingester-ts/issues)
 
 ## License
 
-Apache-2.0 — see `LICENSE`.
+Apache-2.0 — see [LICENSE](./LICENSE).

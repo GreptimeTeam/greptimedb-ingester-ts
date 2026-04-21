@@ -1,0 +1,8 @@
+dist
+node_modules
+.tshy
+.tshy-build
+src/generated
+pnpm-lock.yaml
+*.min.js
+coverage

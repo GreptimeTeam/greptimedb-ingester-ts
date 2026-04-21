@@ -1,13 +1,17 @@
 {
   "name": "@greptime/ingester",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0",
   "description": "Official TypeScript ingester SDK for GreptimeDB (gRPC row + streaming + Arrow Flight bulk).",
   "license": "Apache-2.0",
   "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=20"
   },
   "packageManager": "pnpm@9.15.9",
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "greptimedb",
     "greptime",

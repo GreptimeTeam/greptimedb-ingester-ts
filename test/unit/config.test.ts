@@ -8,7 +8,7 @@ describe('ConfigBuilder', () => {
     expect(cfg.database).toBe('public');
     expect(cfg.timeoutMs).toBe(60_000);
     expect(cfg.grpcCompression).toBe('none');
-    expect(cfg.maxReceiveMessageSize).toBe(512 * 1024 * 1024);
+    expect(cfg.maxReceiveMessageSize).toBe(128 * 1024 * 1024);
     expect(cfg.auth).toBeUndefined();
     expect(cfg.tls).toBeUndefined();
   });

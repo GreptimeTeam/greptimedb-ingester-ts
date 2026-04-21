@@ -14,7 +14,10 @@ import { Client, DataType, Precision, Table } from '../src/index.js';
 
 function parseEndpoints(): string[] {
   const raw = process.env.GREPTIMEDB_ENDPOINTS ?? 'localhost:4001,localhost:4001,localhost:4001';
-  return raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 async function main(): Promise<void> {

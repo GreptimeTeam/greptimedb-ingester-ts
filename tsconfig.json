@@ -36,10 +36,5 @@
     "examples/**/*.ts",
     "scripts/**/*.ts"
   ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    ".tshy",
-    ".tshy-build"
-  ]
+  "exclude": ["node_modules", "dist", ".tshy", ".tshy-build"]
 }

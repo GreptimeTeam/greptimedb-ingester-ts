@@ -144,10 +144,7 @@ function parseRecordBatchMessage(metadata: Uint8Array): ParsedBatch {
  *   - if `prefix + compressed > uncompressed` (strict `>`), fall back to `-1` sentinel
  *     + raw uncompressed bytes, matching `compression.rs:73` behavior.
  */
-async function compressOneBuffer(
-  input: Uint8Array,
-  compressor: Compressor,
-): Promise<Uint8Array> {
+async function compressOneBuffer(input: Uint8Array, compressor: Compressor): Promise<Uint8Array> {
   if (input.byteLength === 0) return new Uint8Array(0);
   const uncompressed = BigInt(input.byteLength);
   const compressed = await compressor(input);
@@ -163,11 +160,7 @@ async function compressOneBuffer(
     return out;
   }
   const out = new Uint8Array(emittedLen);
-  new DataView(out.buffer, out.byteOffset, out.byteLength).setBigInt64(
-    0,
-    uncompressed,
-    true,
-  );
+  new DataView(out.buffer, out.byteOffset, out.byteLength).setBigInt64(0, uncompressed, true);
   out.set(compressed, PREFIX_LEN);
   return out;
 }

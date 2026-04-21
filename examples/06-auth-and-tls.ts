@@ -17,9 +17,7 @@ async function main(): Promise<void> {
   const username = process.env.GREPTIMEDB_USER ?? 'admin';
   const password = process.env.GREPTIMEDB_PASSWORD ?? 'admin';
 
-  const builder = Client.create(endpoint)
-    .withDatabase('public')
-    .withBasicAuth(username, password);
+  const builder = Client.create(endpoint).withDatabase('public').withBasicAuth(username, password);
 
   // Enable TLS via env flag. Any of the three modes works.
   const certPath = process.env.GREPTIMEDB_TLS_CERT_PATH;

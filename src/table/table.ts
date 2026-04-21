@@ -63,9 +63,7 @@ export class Table {
       );
     }
     if (this._columns.some((c) => c.name === spec.name)) {
-      throw new SchemaError(
-        `column "${spec.name}" already exists on table "${this._tableName}"`,
-      );
+      throw new SchemaError(`column "${spec.name}" already exists on table "${this._tableName}"`);
     }
     this._columns.push(spec);
     return this;
@@ -98,9 +96,7 @@ export class Table {
     }
     for (const key of Object.keys(row)) {
       if (!knownNames.has(key)) {
-        throw new SchemaError(
-          `unknown column "${key}" for table "${this._tableName}"`,
-        );
+        throw new SchemaError(`unknown column "${key}" for table "${this._tableName}"`);
       }
     }
     for (let i = 0; i < this._columns.length; i++) {

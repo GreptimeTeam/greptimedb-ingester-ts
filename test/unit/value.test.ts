@@ -56,7 +56,10 @@ describe('toProtoValue', () => {
 
   describe('bool / string / binary', () => {
     it('encodes Bool', () => {
-      expect(toProtoValue(true, DataType.Bool).valueData).toEqual({ case: 'boolValue', value: true });
+      expect(toProtoValue(true, DataType.Bool).valueData).toEqual({
+        case: 'boolValue',
+        value: true,
+      });
     });
     it('rejects non-boolean for Bool', () => {
       expect(() => toProtoValue(1, DataType.Bool)).toThrow(ValueError);
