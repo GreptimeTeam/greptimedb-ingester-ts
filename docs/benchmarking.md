@@ -1,14 +1,21 @@
 # Benchmarking
 
-Reference numbers measured against a local `greptime/greptimedb:v1.0.0` container on an Apple M-series laptop. The schema is 22 columns (mix of tags, fields, timestamp) and mirrors the Rust SDK's log benchmark so numbers compare directly.
+Reference numbers measured against a local `greptime/greptimedb:v1.0.0` container on an Apple M-series laptop. The schema is 22 columns (mix of tags, fields, timestamp); see [Schema](#schema) below.
 
-| Bench     | Setup               | Throughput      | p50  | p95  | p99  |
-| --------- | ------------------- | --------------- | ---- | ---- | ---- |
-| unary     | 1M rows, batch=1000 | 29k rows/s      | 32ms | 36ms | 39ms |
-| streaming | 1M rows, batch=1000 | 34k rows/s      | 26ms | 37ms | 48ms |
-| bulk      | 2M rows, batch=5000 | **141k rows/s** | 26ms | 29ms | 37ms |
+| Bench     | Setup               | Concurrency       | Throughput      | p50  | p95   | p99   |
+| --------- | ------------------- | ----------------- | --------------- | ---- | ----- | ----- |
+| unary     | 1M rows, batch=1000 | 1 (request/resp)  | 26k rows/s      | 33ms | 40ms  | 207ms |
+| streaming | 1M rows, batch=1000 | 1 (single stream) | 31k rows/s      | 27ms | 38ms  | 207ms |
+| bulk      | 2M rows, batch=5000 | 8 (default)       | **137k rows/s** | 48ms | 353ms | 395ms |
 
-All three benchmarks use the same schema and the same ~3072-series cardinality (see [Schema](#schema)). Bulk uses the default `parallelism=8`. Batch sizes mirror the Rust SDK's published log benchmark.
+All three share the same schema and ~3072-series cardinality. Batch sizes mirror the Rust SDK's published log benchmark.
+
+### Methodology
+
+- **Rows pre-generated** before the timer starts (matches the Rust SDK benchmark layout).
+- **Timer is end-to-end**: for unary/streaming it includes each ack / `stream.finish()`; for bulk it includes every batch's ack drained by `bulk.finish()`. Numbers reflect "time to commit N rows to the server", not "time to push N rows onto a buffer".
+- **Unary and streaming are single-concurrency**: a single `Client` writing serially on one connection. Real applications needing more throughput run multiple clients.
+- **Bulk uses fire-and-forget**: `writeRowsAsync()` submits without blocking on per-batch acks, so the SDK's `parallelism: 8` semaphore keeps up to 8 batches in flight. p50/p95/p99 measure submit-to-ack under this saturated pipeline — the tails reflect semaphore queue time at the cap, not individual RPC latency.
 
 ## Schema
 
@@ -41,6 +48,18 @@ The 22-column `bench_logs` table mixes three tag tiers plus numeric / boolean / 
 
 **Series cardinality**: the 4 tag columns yield up to `service(6) × host(32) × region(4) × env(4) = 3072` distinct time series. At 1–2M random rows all 3072 are populated (verified against the running table). High-cardinality identifiers like `trace_id` / `span_id` are kept as fields, not tags, so they don't multiply the series count.
 
+## Apples-to-apples: CPU schema (vs Go SDK)
+
+A separate `cpu-bulk-api` bench mirrors the schema and data shape used in the [Greptime ingestion protocol benchmark blog](https://greptime.com/blogs/2026-03-24-ingestion-protocol-benchmark): 4 string tags + 5 Float64 fields + 1 ms timestamp, `numHosts × 5 × 10 × 20` series, round-robin distribution.
+
+Same M4 Max / 48GB / GreptimeDB standalone as the blog:
+
+| Config                          | Go SDK (blog)            | TS SDK (this repo)      |
+| ------------------------------- | ------------------------ | ----------------------- |
+| 1M series, 10M rows, batch=1000 | 2.01M rows/s (p50=1.7ms) | ~700k rows/s (p50=11ms) |
+
+Today's gap is Arrow JS single-thread encoding (`rowsToArrowTable` = 99% of client CPU, measured via `bench/encode-only.ts`). We'll keep optimizing the encoder.
+
 ## Running against your own deployment
 
 ```bash
@@ -48,11 +67,12 @@ The 22-column `bench_logs` table mixes three tag tiers plus numeric / boolean / 
 pnpm bench bulk-api --rows=2000000 --batch-size=5000 --endpoint=localhost:4001
 ```
 
-Available benchmark names: `regular-api`, `stream-api`, `bulk-api`. Shared flags:
+Available benchmark names: `regular-api`, `stream-api`, `bulk-api`, `cpu-bulk-api`. Shared flags:
 
 - `--rows=N` — total rows to push
 - `--batch-size=N` — per-`write()` batch
 - `--parallelism=N` — concurrent in-flight RPCs (bulk only; default 8)
+- `--num-hosts=N` — `cpu-bulk-api` only; cardinality = `N × 5 × 10 × 20` series (default 100 → 100k series; use 1000 for the blog's 1M-series config)
 - `--endpoint=host:port`
 
 ## Tuning tips

@@ -132,7 +132,7 @@ Run any of them with `pnpm example <name>` after `./scripts/run-greptimedb.sh` s
 
 ## Performance
 
-Bulk path reaches **~141k rows/s** on local docker with a 22-column log schema (2M rows, batch=5000). Full numbers, schema, and how to reproduce: [docs/benchmarking.md](./docs/benchmarking.md).
+Bulk path reaches **~137k rows/s** on local docker with a 22-column log schema (2M rows, batch=5000, default `parallelism=8`). Unary and streaming single-client numbers plus methodology notes: [docs/benchmarking.md](./docs/benchmarking.md).
 
 ## Compatibility
 
