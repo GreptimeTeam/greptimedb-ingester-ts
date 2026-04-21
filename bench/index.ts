@@ -13,7 +13,9 @@ if (arg === undefined) {
   console.error(
     'Usage: pnpm bench <name> [--rows=N --batch-size=N --parallelism=N --endpoint=host:port]',
   );
-  console.error('Available: regular-api, stream-api, bulk-api, cpu-bulk-api');
+  console.error(
+    'Available: regular-api, stream-api, bulk-api, cpu-bulk-api, cpu-influxdb, cpu-otel',
+  );
   process.exit(2);
 }
 
