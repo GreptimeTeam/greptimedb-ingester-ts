@@ -105,6 +105,10 @@ async function main(): Promise<void> {
   const exporter = new OTLPLogExporter({
     url: `${httpEndpoint.replace(/\/$/, '')}/v1/otlp/v1/logs`,
     headers,
+    // Raise the bounded in-flight queue so --parallelism is actually honored.
+    // The exporter's default is 30 — runs with --parallelism above that would
+    // deterministically fail with "Concurrent export limit reached".
+    concurrencyLimit: Math.max(30, parallelism),
   });
 
   const resource = emptyResource();

@@ -136,9 +136,9 @@ Writing to GreptimeDB from Node.js? The bulk path is the fastest option by a wid
 
 | JS client                                 | batch=1000   | batch=5000   | Relative     |
 | ----------------------------------------- | ------------ | ------------ | ------------ |
-| `@greptime/ingester` (bulk)               | **807k r/s** | **811k r/s** | **baseline** |
-| `@opentelemetry/exporter-logs-otlp-proto` | 622k r/s     | 621k r/s     | 0.77×        |
-| `@influxdata/influxdb-client`             | 496k r/s     | 500k r/s     | 0.62×        |
+| `@greptime/ingester` (bulk)               | **789k r/s** | **758k r/s** | **baseline** |
+| `@opentelemetry/exporter-logs-otlp-proto` | 679k r/s     | 638k r/s     | 0.85×        |
+| `@influxdata/influxdb-client`             | 494k r/s     | 520k r/s     | 0.66×        |
 
 Same schema, same data generator, same server, same Node.js runtime; each client is driven with its own default configuration. Arrow Flight ships the batch already-columnar so the server skips text/proto parsing and per-attribute column mapping.
 

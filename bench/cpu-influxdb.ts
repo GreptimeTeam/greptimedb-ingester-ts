@@ -4,9 +4,11 @@
 //   - token:  "user:password" (GreptimeDB convention)
 //   - schema: same CPU model as cpu-bulk-api / cpu-otel
 //
-// Per-instance config is SDK default (batchSize=1000, flushInterval=60000,
-// maxRetries=3). We drive per-batch `writePoints` + `flush` as a public API
-// call — not a config override — to get per-batch latency and bounded memory.
+// Per-instance config is near-SDK-default: we only override `batchSize` to
+// match the user's --batch-size (otherwise the SDK's 1000-line threshold
+// silently chunks a 5000-point batch into five HTTP POSTs, and reported
+// per-batch latencies stop being comparable to cpu-bulk-api / cpu-otel).
+// `flushInterval=60000ms` and `maxRetries=5` stay at SDK defaults.
 //
 // Concurrency: N worker tasks, each owning its own `WriteApi`. The JS SDK
 // has no blocking-write equivalent of Go's `WriteAPIBlocking`, and a shared
@@ -56,12 +58,12 @@ async function main(): Promise<void> {
   const client = new InfluxDB({ url, token });
   const hist = createLatencyHistogram();
 
-  // One WriteApi per worker to avoid shared-buffer races. No config overrides
-  // — the SDK defaults (batchSize=1000, flushInterval=60000ms, maxRetries=3)
-  // apply. With per-batch sizes ≤ batchSize, `writePoints` just buffers and
-  // the explicit `flush()` drives the single HTTP POST.
+  // One WriteApi per worker to avoid shared-buffer races. We pin `batchSize`
+  // to --batch-size so each `writePoints(batch)` emits exactly one HTTP POST
+  // (the SDK's default 1000-line threshold would otherwise split a 5000-point
+  // batch into five POSTs). All other options stay at SDK defaults.
   const writeApis: WriteApi[] = Array.from({ length: parallelism }, () =>
-    client.getWriteApi('', database, 'ms'),
+    client.getWriteApi('', database, 'ms', { batchSize }),
   );
 
   try {
@@ -84,7 +86,10 @@ async function main(): Promise<void> {
           const pts = allBatches[i]!;
           const t0 = process.hrtime.bigint();
           api.writePoints(pts);
-          await api.flush();
+          // `flush(true)` drains both the write buffer and the retry buffer,
+          // so a transient 429/5xx is only counted as written once its retry
+          // succeeds. Plain `flush()` would silently leave pending retries.
+          await api.flush(true);
           hist.recordValue(Number(process.hrtime.bigint() - t0) / 1e6);
           writtenRows += pts.length;
         }

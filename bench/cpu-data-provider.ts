@@ -57,6 +57,12 @@ export function cpuSchema(tableName: string): TableSchema {
 }
 
 export function generateCpuRows(count: number, numHosts: number, offset: number): CpuRow[] {
+  if (!Number.isInteger(numHosts) || numHosts < 1) {
+    throw new RangeError(`numHosts must be a positive integer, got ${numHosts}`);
+  }
+  if (!Number.isInteger(count) || count < 0) {
+    throw new RangeError(`count must be a non-negative integer, got ${count}`);
+  }
   const dcServices = DATACENTERS.length * SERVICES.length;
   const regionBlock = REGIONS.length * dcServices;
   const seriesCount = numHosts * regionBlock;
