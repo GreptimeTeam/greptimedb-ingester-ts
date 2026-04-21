@@ -223,8 +223,8 @@ describe('ipc-compression', () => {
   );
 
   it('emits the -1 sentinel for incompressible buffers', async () => {
-    // Build a table whose string column carries cryptographic-random data so that
-    // compressed output >= uncompressed output and our code falls back to `-1`
+    // Build a table whose string column carries high-entropy pseudo-random data so
+    // that compressed output >= uncompressed output and our code falls back to `-1`
     // prefix + raw bytes (matches arrow-rs `compression.rs:73`).
     const table = Table.new('incompressible')
       .addTagColumn('host', DataType.String)
