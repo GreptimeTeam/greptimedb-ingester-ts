@@ -148,7 +148,7 @@ On the 22-column log schema the bulk path reaches **~137k rows/s** (2M rows, bat
 
 - Tested: Node.js 22.x + GreptimeDB 1.0.0 / latest.
 - Node.js 20.x: supported (minimum).
-- Bun / Deno (node-compat): best-effort, not CI-gated.
+- Bun (latest) and Deno (2.x): CI-gated via a smoke-level integration test against a live GreptimeDB. Full unit suite runs on Node only.
 
 See [docs/divergences.md](./docs/divergences.md) for where the TS SDK intentionally differs from the Rust / Go SDKs.
 
