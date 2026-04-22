@@ -81,3 +81,99 @@ jobs:
       - name: Stop GreptimeDB
         if: always()
         run: docker rm -f greptimedb || true
+
+  bun-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: pnpm install --frozen-lockfile
+      - name: Start GreptimeDB
+        env:
+          GREPTIMEDB_VERSION: v1.0.0
+        run: |
+          docker run -d --name greptimedb-bun \
+            -p 4000:4000 -p 4001:4001 -p 4002:4002 \
+            "greptime/greptimedb:${GREPTIMEDB_VERSION}" standalone start \
+              --http-addr 0.0.0.0:4000 \
+              --rpc-bind-addr 0.0.0.0:4001 \
+              --mysql-addr 0.0.0.0:4002
+      - name: Wait for GreptimeDB readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
+              echo "GreptimeDB is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "GreptimeDB failed to become ready"
+          docker logs greptimedb-bun
+          exit 1
+      - run: bun run scripts/smoke.ts
+        env:
+          GREPTIMEDB_ENDPOINT: localhost:4001
+          GREPTIMEDB_HTTP: http://127.0.0.1:4000
+      - name: Dump GreptimeDB logs on failure
+        if: failure()
+        run: docker logs greptimedb-bun
+      - name: Stop GreptimeDB
+        if: always()
+        run: docker rm -f greptimedb-bun || true
+
+  deno-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: pnpm install --frozen-lockfile
+      - name: Start GreptimeDB
+        env:
+          GREPTIMEDB_VERSION: v1.0.0
+        run: |
+          docker run -d --name greptimedb-deno \
+            -p 4000:4000 -p 4001:4001 -p 4002:4002 \
+            "greptime/greptimedb:${GREPTIMEDB_VERSION}" standalone start \
+              --http-addr 0.0.0.0:4000 \
+              --rpc-bind-addr 0.0.0.0:4001 \
+              --mysql-addr 0.0.0.0:4002
+      - name: Wait for GreptimeDB readiness
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
+              echo "GreptimeDB is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "GreptimeDB failed to become ready"
+          docker logs greptimedb-deno
+          exit 1
+      - run: deno run -A scripts/smoke.ts
+        env:
+          GREPTIMEDB_ENDPOINT: localhost:4001
+          GREPTIMEDB_HTTP: http://127.0.0.1:4000
+      - name: Dump GreptimeDB logs on failure
+        if: failure()
+        run: docker logs greptimedb-deno
+      - name: Stop GreptimeDB
+        if: always()
+        run: docker rm -f greptimedb-deno || true
