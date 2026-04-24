@@ -75,7 +75,7 @@ const { totalAffectedRows } = await bulk.finish();
 
 For LZ4 / ZSTD body compression, pass `{ compression: BulkCompression.Lz4 }`. See [`examples/05-bulk-compression-lz4.ts`](./examples/05-bulk-compression-lz4.ts).
 
-For fire-and-forget, use `writeRowsAsync(batch)` — it returns the request id and lets you submit the next batch immediately. **Every id must be claimed with `waitForResponse(id)` before `finish()`**; unclaimed acks accumulate in an internal map and are not auto-evicted, so skipping the claim in a long-running stream leaks memory. `writeRows(batch)` does the claim for you.
+For fire-and-forget, use `writeRowsAsync(batch)` — returns the request id and lets you submit the next batch immediately. `finish()` waits for every in-flight call and throws `BulkError` if any rejected, or if any group settled as a failure and was never claimed via `waitForResponse(id)` — silent partial ingestion isn't possible. Unclaimed acks are capped at `maxUnclaimedResponses` (default 10_000, oldest-first eviction). Claim ids with `waitForResponse(id)` when you need per-batch `affectedRows`; otherwise `writeRows(batch)` does the claim for you.
 
 ## Decorator API
 
@@ -111,22 +111,22 @@ Full reference: [docs/configuration.md](./docs/configuration.md).
 
 ## Errors
 
-All errors extend `IngesterError`. Non-retriable: `ConfigError`, `SchemaError`, `ValueError`, `StateError`. Retriable or case-by-case: `TransportError` (`.grpcCode`), `ServerError` (`.statusCode`), `TimeoutError`, `AbortedError`, `BulkError`.
+All errors extend `IngesterError`. Non-retriable: `ConfigError`, `SchemaError`, `ValueError`, `StateError`, `AbortedError`. Retriable or case-by-case: `TransportError` (`.grpcCode`), `ServerError` (`.statusCode`), `TimeoutError`, `BulkError`.
 
 Classify with `isRetriable(err, 'aggressive' | 'conservative')`. Default is `aggressive` and mirrors the Rust SDK; `conservative` narrows to transient gRPC codes only.
 
 ## Examples
 
-| File                                      | What                                                            |
-| ----------------------------------------- | --------------------------------------------------------------- |
-| `examples/01-simple-insert.ts`            | Table builder → `client.write`                                  |
-| `examples/02-insert-object-decorators.ts` | `@tableName` / `@tag` / `@field` / `@timestamp` + `writeObject` |
-| `examples/03-stream-insert.ts`            | `StreamWriter` with 10k rows                                    |
-| `examples/04-bulk-insert.ts`              | Unary bootstrap → bulk 100k rows                                |
-| `examples/05-bulk-compression-lz4.ts`     | LZ4 frame compression on the bulk path                          |
-| `examples/06-auth-and-tls.ts`             | Basic auth + TLS config                                         |
-| `examples/07-multi-endpoint-lb.ts`        | Multiple endpoints, random LB                                   |
-| `examples/08-abort-and-retry.ts`          | `AbortSignal` + conservative retry                              |
+| File                                                                                   | What                                                            |
+| -------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| [`examples/01-simple-insert.ts`](./examples/01-simple-insert.ts)                       | Table builder → `client.write`                                  |
+| [`examples/02-insert-object-decorators.ts`](./examples/02-insert-object-decorators.ts) | `@tableName` / `@tag` / `@field` / `@timestamp` + `writeObject` |
+| [`examples/03-stream-insert.ts`](./examples/03-stream-insert.ts)                       | `StreamWriter` with 10k rows                                    |
+| [`examples/04-bulk-insert.ts`](./examples/04-bulk-insert.ts)                           | Unary bootstrap → bulk 100k rows                                |
+| [`examples/05-bulk-compression-lz4.ts`](./examples/05-bulk-compression-lz4.ts)         | LZ4 frame compression on the bulk path                          |
+| [`examples/06-auth-and-tls.ts`](./examples/06-auth-and-tls.ts)                         | Basic auth + TLS config                                         |
+| [`examples/07-multi-endpoint-lb.ts`](./examples/07-multi-endpoint-lb.ts)               | Multiple endpoints, random LB                                   |
+| [`examples/08-abort-and-retry.ts`](./examples/08-abort-and-retry.ts)                   | `AbortSignal` + conservative retry                              |
 
 Run any of them with `pnpm example <name>` after `./scripts/run-greptimedb.sh` starts a local server.
 
@@ -146,8 +146,8 @@ On the 22-column log schema the bulk path reaches **~137k rows/s** (2M rows, bat
 
 ## Compatibility
 
-- Tested: Node.js 22.x + GreptimeDB 1.0.0 / latest.
-- Node.js 20.x: supported (minimum).
+- CI-tested: Node.js 20.x and 22.x, full suite; integration tests against `greptime/greptimedb:v1.0.0`.
+- Node.js 20.x is the supported minimum.
 - Bun (latest) and Deno (2.x): CI-gated via a smoke-level integration test against a live GreptimeDB. Full unit suite runs on Node only.
 
 See [docs/divergences.md](./docs/divergences.md) for where the TS SDK intentionally differs from the Rust / Go SDKs.
