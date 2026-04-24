@@ -1,5 +1,5 @@
 import { createDeferred, type Deferred } from '../internal/deferred.js';
-import { TimeoutError } from '../errors.js';
+import { BulkError, TimeoutError } from '../errors.js';
 
 export interface BulkWriteResponse {
   readonly requestId: number;
@@ -20,6 +20,13 @@ export class RequestTracker {
   private nextId = 1;
 
   public alloc(): number {
+    // 2^53 ids is astronomical for a single stream (~2850 years at 100k rps), but
+    // guard the ceiling anyway — wrapping to 1 would risk collision with still-
+    // pending ids and force a lookup on every alloc. Fail loudly instead so the
+    // caller can recreate the writer.
+    if (this.nextId > Number.MAX_SAFE_INTEGER) {
+      throw new BulkError('bulk request id space exhausted; recreate the writer');
+    }
     const id = this.nextId++;
     return id;
   }

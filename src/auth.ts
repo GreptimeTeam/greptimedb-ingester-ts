@@ -14,17 +14,6 @@ import {
 import type { AuthConfig, ClientConfig } from './config.js';
 import { ValueError } from './errors.js';
 
-/**
- * Frozen empty Metadata reused for hint-less calls so the unary/streaming hot paths
- * don't allocate a new Metadata per write. grpc-js clones request metadata before
- * mutation, so sharing this instance is safe.
- */
-export const EMPTY_METADATA: Metadata = (() => {
-  const md = new Metadata();
-  Object.freeze(md);
-  return md;
-})();
-
 function buildAuthHeader(auth: AuthConfig): AuthHeader {
   // Only `basic` is supported; see AuthConfig docs.
   const basic = create(BasicSchema, { username: auth.username, password: auth.password });
@@ -77,13 +66,15 @@ function encodeAuthMetadata(auth: AuthConfig): string {
  * key or value containing `,` or `=` is rejected with `ValueError` — silently mangling
  * such inputs would produce wrong server-side behavior with no diagnostic.
  *
- * Returns the shared frozen `EMPTY_METADATA` when `hints` is undefined or empty so
- * callers don't allocate per write.
+ * Returns a fresh `Metadata` instance every call. A shared singleton is tempting but
+ * brittle — it makes correctness depend on grpc-js cloning request metadata before
+ * mutation, an internal invariant we shouldn't rely on. The sub-microsecond allocation
+ * cost is invisible next to the surrounding gRPC call.
  */
 export function buildHintsMetadata(hints?: Record<string, string>): Metadata {
-  if (hints === undefined) return EMPTY_METADATA;
+  if (hints === undefined) return new Metadata();
   const entries = Object.entries(hints);
-  if (entries.length === 0) return EMPTY_METADATA;
+  if (entries.length === 0) return new Metadata();
   const parts: string[] = [];
   for (const [k, v] of entries) {
     if (k.length === 0) {

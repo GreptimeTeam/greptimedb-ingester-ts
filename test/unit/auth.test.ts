@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildFlightMetadata,
-  buildHintsMetadata,
-  buildRequestHeader,
-  EMPTY_METADATA,
-} from '../../src/auth.js';
+import { Metadata } from '@grpc/grpc-js';
+import { buildFlightMetadata, buildHintsMetadata, buildRequestHeader } from '../../src/auth.js';
 import { ConfigBuilder, ValueError } from '../../src/index.js';
 
 describe('buildRequestHeader (unary/streaming path)', () => {
@@ -51,12 +47,18 @@ describe('buildFlightMetadata (bulk path)', () => {
 });
 
 describe('buildHintsMetadata (unary/streaming hints — Rust-aligned wire format)', () => {
-  it('returns the shared frozen empty Metadata when hints is undefined', () => {
-    expect(buildHintsMetadata(undefined)).toBe(EMPTY_METADATA);
+  it('returns a fresh empty Metadata when hints is undefined', () => {
+    const md = buildHintsMetadata(undefined);
+    expect(md).toBeInstanceOf(Metadata);
+    expect(md.get('x-greptime-hints')).toEqual([]);
+    // Distinct instance every call — no shared singleton that grpc-js might mutate.
+    expect(buildHintsMetadata(undefined)).not.toBe(md);
   });
 
-  it('returns the shared frozen empty Metadata when hints is empty', () => {
-    expect(buildHintsMetadata({})).toBe(EMPTY_METADATA);
+  it('returns a fresh empty Metadata when hints is empty', () => {
+    const md = buildHintsMetadata({});
+    expect(md).toBeInstanceOf(Metadata);
+    expect(md.get('x-greptime-hints')).toEqual([]);
   });
 
   it('serializes hints as a single x-greptime-hints comma-joined header', () => {

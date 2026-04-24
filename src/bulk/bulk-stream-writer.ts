@@ -44,7 +44,18 @@ export interface BulkWriteOptions {
   readonly timeoutMs?: number;
   readonly parallelism?: number;
   readonly signal?: AbortSignal;
+  /**
+   * Cap on the number of settled-but-unclaimed responses held in memory for
+   * `writeRowsAsync` callers that never invoke `waitForResponse(id)`. When the
+   * map reaches this size, the oldest entry is evicted (insertion order) and a
+   * single warn is logged per writer. Callers hitting the cap have a leaky
+   * drain pattern — missed acks do not imply a server-side write failure, but
+   * the id becomes unclaimable. Default: 10_000.
+   */
+  readonly maxUnclaimedResponses?: number;
 }
+
+const DEFAULT_MAX_UNCLAIMED_RESPONSES = 10_000;
 
 export interface RowBatch {
   readonly kind: 'rows';
@@ -89,6 +100,13 @@ export class BulkStreamWriter {
   private compressionCtx: EncodeCompressionContext | undefined;
   private readonly groups = new Map<number, FrameGroup>();
   private readonly completed = new Map<number, SettledGroup>();
+  // Every live writeRowsAsync invocation's top-level promise. Registered
+  // synchronously at call time (before any await), so `finish()` can always
+  // see in-flight work even when the caller fire-and-forgets: `void
+  // bulk.writeRowsAsync(...)` then immediately `await bulk.finish()`.
+  private readonly inFlight = new Set<Promise<number>>();
+  private readonly maxUnclaimedResponses: number;
+  private completedEvictionWarned = false;
   private state: State = 'fresh';
   private totalAffected = 0;
   private totalRequests = 0;
@@ -107,6 +125,16 @@ export class BulkStreamWriter {
     this.logger = cfg.logger ?? NOOP_LOGGER;
     const parallelism = opts?.parallelism ?? 8;
     this.semaphore = new Semaphore(parallelism);
+    const maxUnclaimed = opts?.maxUnclaimedResponses ?? DEFAULT_MAX_UNCLAIMED_RESPONSES;
+    // Reject 0 / negative / NaN at construction: a cap of 0 turns recordCompleted
+    // into "evict-then-insert on every call", and NaN breaks the size comparison
+    // entirely. Integer >= 1 is the only meaningful range.
+    if (!Number.isInteger(maxUnclaimed) || maxUnclaimed < 1) {
+      throw new BulkError(
+        `maxUnclaimedResponses must be a positive integer, got ${String(maxUnclaimed)}`,
+      );
+    }
+    this.maxUnclaimedResponses = maxUnclaimed;
     if (opts?.timeoutMs !== undefined) this.timeoutMs = opts.timeoutMs;
 
     // Pre-compute Arrow schema artifacts (Field[], Type[], Schema) once. Reused both
@@ -203,13 +231,30 @@ export class BulkStreamWriter {
    * Send one batch and return its request id immediately. Use `waitForResponse(id)` later
    * to collect the ack. Still honors parallelism via the semaphore.
    *
-   * Contract: every id returned here MUST eventually be consumed by `waitForResponse(id)`.
-   * Completed but unclaimed acks accumulate in an internal map and are never evicted —
-   * leaking a few is harmless, but never claiming them in a long-running stream is a
-   * memory leak. If you don't need fire-and-forget semantics, use `writeRows()` which
-   * waits for you.
+   * Contract: every id returned here SHOULD eventually be consumed by `waitForResponse(id)`;
+   * settled-but-unclaimed acks are capped per `maxUnclaimedResponses` (default 10_000) and
+   * then evicted oldest-first with a single warn log. For write-and-wait semantics, use
+   * `writeRows()`.
    */
-  public async writeRowsAsync(batch: RowBatch): Promise<number> {
+  public writeRowsAsync(batch: RowBatch): Promise<number> {
+    // Synchronous wrapper: register the invocation's promise in `inFlight` BEFORE
+    // returning so a caller that fire-and-forgets (`void bulk.writeRowsAsync(...)`)
+    // followed by `await bulk.finish()` still has its work awaited. If we registered
+    // inside the async body, the registration would happen AFTER the first internal
+    // await — by then finish() may have already called call.end() and the frame
+    // write would fail with "write after end".
+    const p = this._writeRowsAsync(batch);
+    this.inFlight.add(p);
+    // Swallow rejection locally on the tracker-cleanup branch so the set is drained
+    // even on failure; callers still observe the original rejection via `p`.
+    p.then(
+      () => this.inFlight.delete(p),
+      () => this.inFlight.delete(p),
+    );
+    return p;
+  }
+
+  private async _writeRowsAsync(batch: RowBatch): Promise<number> {
     if (this.state === 'fresh') await this.handshake();
     if (this.state !== 'ready') {
       throw new BulkError(`cannot write in state "${this.state}"`);
@@ -305,6 +350,22 @@ export class BulkStreamWriter {
   }
 
   private recordCompleted(id: number, settled: SettledGroup): void {
+    // Cap the map so a caller that never invokes waitForResponse() can't grow
+    // it unboundedly. Map preserves insertion order; the first key is the
+    // oldest. Evict it before inserting so size stays <= maxUnclaimedResponses.
+    if (this.completed.size >= this.maxUnclaimedResponses) {
+      const oldest = this.completed.keys().next();
+      if (!oldest.done) this.completed.delete(oldest.value);
+      if (!this.completedEvictionWarned) {
+        this.completedEvictionWarned = true;
+        this.logger.log(
+          'warn',
+          `bulk completed-response cache full (${this.maxUnclaimedResponses}); ` +
+            'evicting oldest entries — unclaimed ids will report "no pending response"',
+          { table: this.schema.tableName, cap: this.maxUnclaimedResponses },
+        );
+      }
+    }
     this.completed.set(id, settled);
   }
 
@@ -356,6 +417,30 @@ export class BulkStreamWriter {
       throw new BulkError(`cannot finish in state "${this.state}"`);
     }
     this.state = 'halfClosed';
+    // Wait for every in-flight writeRowsAsync to finish writing its frames
+    // before half-closing the wire. Callers who fire-and-forget
+    // `void bulk.writeRowsAsync(...)` and then hit finish() would otherwise
+    // race: call.end() closes the write side mid-frame and the still-running
+    // _writeRowsAsync trips ERR_STREAM_WRITE_AFTER_END. allSettled — not
+    // Promise.all — because one in-flight failure must not short-circuit
+    // draining the rest, but we do surface rejections below.
+    let fireAndForgetErrors: unknown[] = [];
+    if (this.inFlight.size > 0) {
+      const results = await Promise.allSettled([...this.inFlight]);
+      // Fire-and-forget reject surfacing: a caller who `void`-ed the promise
+      // has no other channel to learn about the failure. Without this step
+      // finish() would return a success summary that silently dropped one or
+      // more batches (encode error, mid-stream call.write failure, etc.) —
+      // turning a hard failure into silent partial ingestion.
+      // Promises the caller already awaited and observed have already been
+      // removed from `inFlight` via the `.then(delete, delete)` cleanup, so
+      // they don't double-report here.
+      // `PromiseRejectedResult.reason` is typed `any` in lib.d.ts — narrow to
+      // unknown explicitly so downstream `cause` plumbing stays type-safe.
+      fireAndForgetErrors = results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r): unknown => r.reason);
+    }
     this.call.end();
     try {
       if (this.drainPromise !== undefined) await this.drainPromise;
@@ -369,6 +454,16 @@ export class BulkStreamWriter {
       );
       this.tracker.rejectAll(err);
       throw err;
+    }
+    if (fireAndForgetErrors.length > 0) {
+      // Preserve the first underlying error as `cause` so it survives util.inspect;
+      // the message enumerates the count so the caller knows whether to look deeper.
+      const first = fireAndForgetErrors[0];
+      const msg =
+        fireAndForgetErrors.length === 1
+          ? `1 fire-and-forget writeRowsAsync call rejected and was never awaited by the caller`
+          : `${fireAndForgetErrors.length} fire-and-forget writeRowsAsync calls rejected and were never awaited by the caller`;
+      throw new BulkError(msg, undefined, first);
     }
     // Fire-and-forget detector: acks that completed but were never claimed via
     // `waitForResponse(id)`. Not an error — the server-side write succeeded — but

@@ -89,6 +89,7 @@ Shared flags:
 - Enable `BulkCompression.Lz4` or `BulkCompression.Zstd` for bandwidth-constrained links.
 - Prefer bulk over unary for sustained ingest — Arrow columnar amortizes encoding cost across the batch.
 - One `Client` per process; channels pool internally.
+- With body compression enabled, `compressBatchMessage` uses `Promise.all` to compress every buffer in a RecordBatch concurrently. `lz4-napi` and `@mongodb-js/zstd` are both native add-ons that dispatch to the libuv thread pool (`UV_THREADPOOL_SIZE`, default 4). Wide schemas (many columns → many buffers) combined with high `parallelism` can saturate the pool and cause head-of-line blocking for other async I/O. If you see unexplained latency cliffs under bulk + compression, set `UV_THREADPOOL_SIZE=8` (or higher) in the producer process.
 
 ## Schema
 

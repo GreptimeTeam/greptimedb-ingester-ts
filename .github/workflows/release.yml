@@ -11,7 +11,53 @@ permissions:
   id-token: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm codegen:check
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm test
+      - run: pnpm build
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/greptimedb
+        with:
+          container-name: greptimedb-release
+      - run: pnpm test:integration
+        env:
+          GREPTIMEDB_ENDPOINT: localhost:4001
+          GREPTIMEDB_HTTP: http://127.0.0.1:4000
+      - name: Dump GreptimeDB logs on failure
+        if: failure()
+        run: docker logs greptimedb-release
+      - name: Stop GreptimeDB
+        if: always()
+        run: docker rm -f greptimedb-release || true
+
   publish:
+    needs: [verify, integration]
     runs-on: ubuntu-latest
     environment: release
     steps:
@@ -25,11 +71,6 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
-      - run: pnpm codegen:check
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm format:check
-      - run: pnpm test
       - run: pnpm build
       - name: Verify tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/v')

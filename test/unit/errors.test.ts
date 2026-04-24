@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AbortedError,
   ConfigError,
   SchemaError,
   ServerError,
+  StateError,
   TimeoutError,
   TransportError,
   ValueError,
@@ -15,6 +17,17 @@ describe('isRetriable', () => {
       expect(isRetriable(new ConfigError('bad'), mode)).toBe(false);
       expect(isRetriable(new SchemaError('dup'), mode)).toBe(false);
       expect(isRetriable(new ValueError('overflow'), mode)).toBe(false);
+      expect(isRetriable(new StateError('closed'), mode)).toBe(false);
+    }
+  });
+
+  // Regression: aggressive mode used to classify AbortedError as retriable because
+  // the bare `instanceof IngesterError` branch caught it. `withRetry`'s signal
+  // check saved the runtime outcome, but the semantics leaked into logs as a
+  // scheduled retry. Must be non-retriable in every mode.
+  it('never retries AbortedError in either mode', () => {
+    for (const mode of ['aggressive', 'conservative'] as const) {
+      expect(isRetriable(new AbortedError('cancelled'), mode)).toBe(false);
     }
   });
 
