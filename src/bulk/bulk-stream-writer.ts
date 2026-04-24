@@ -465,11 +465,26 @@ export class BulkStreamWriter {
           : `${fireAndForgetErrors.length} fire-and-forget writeRowsAsync calls rejected and were never awaited by the caller`;
       throw new BulkError(msg, undefined, first);
     }
-    // Fire-and-forget detector: acks that completed but were never claimed via
-    // `waitForResponse(id)`. Not an error — the server-side write succeeded — but
-    // signals the caller's drain pattern is leaky and the `completed` map grew
-    // longer than necessary. Logging at `info` keeps this diagnosable without
-    // false-alarming users of the common `writeRows()` (write-and-wait) API.
+    // Group-level failures (server-side errors, drain-loop rejectAll, per-request
+    // timeouts) settle their groups as `{ ok: false }` in `completed`. A fire-and-
+    // forget caller who never invokes `waitForResponse(id)` has no other channel
+    // through which to observe these — if we returned a success summary here the
+    // failure would be silent. Scan before the success path and surface as
+    // BulkError with the first underlying error as `cause`.
+    const unclaimedFailures: unknown[] = [];
+    for (const entry of this.completed.values()) {
+      if (!entry.ok) unclaimedFailures.push(entry.error);
+    }
+    if (unclaimedFailures.length > 0) {
+      const msg =
+        unclaimedFailures.length === 1
+          ? `1 writeRowsAsync group failed after dispatch and was never claimed via waitForResponse`
+          : `${unclaimedFailures.length} writeRowsAsync groups failed after dispatch and were never claimed via waitForResponse`;
+      throw new BulkError(msg, undefined, unclaimedFailures[0]);
+    }
+    // Successful but unclaimed acks: not an error — the server-side write succeeded
+    // — but signals a leaky drain pattern. `info` keeps it diagnosable without
+    // false-alarming the common `writeRows()` (write-and-wait) API.
     if (this.completed.size > 0) {
       this.logger.log(
         'info',
