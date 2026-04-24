@@ -15,6 +15,7 @@ import {
   type RowInsertRequest,
   type RowInsertRequests,
 } from '../generated/greptime/v1/database_pb.js';
+import { SchemaError } from '../errors.js';
 import { toProtoDataType, toProtoSemanticType } from '../table/data-type.js';
 import { toProtoValue } from '../table/value.js';
 import type { Table } from '../table/table.js';
@@ -32,7 +33,7 @@ export function encodeTable(table: Table): RowInsertRequest {
     const values = rowValues.map((v, colIdx) => {
       const spec = cols[colIdx];
       if (spec === undefined) {
-        throw new Error(`internal: row has more values than columns (col ${colIdx})`);
+        throw new SchemaError(`internal: row has more values than columns (col ${colIdx})`);
       }
       return toProtoValue(v, spec.dataType);
     });

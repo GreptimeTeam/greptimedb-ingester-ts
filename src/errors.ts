@@ -4,12 +4,11 @@
 
 export abstract class IngesterError extends Error {
   public abstract readonly kind: string;
-  public override readonly cause?: unknown;
 
   protected constructor(message: string, cause?: unknown) {
-    super(message);
+    // ES2022 Error(cause) — lets util.inspect print the cause chain automatically.
+    super(message, cause !== undefined ? { cause } : undefined);
     this.name = new.target.name;
-    if (cause !== undefined) this.cause = cause;
   }
 }
 
@@ -115,11 +114,17 @@ const CONSERVATIVE_RETRIABLE_GRPC_CODES = new Set<number>([
 ]);
 
 export function isRetriable(err: unknown, mode: RetryMode = 'aggressive'): boolean {
+  // AbortedError is explicitly non-retriable in every mode: the caller has signaled
+  // they want the operation to stop. Without this, aggressive mode's broad
+  // `instanceof IngesterError` branch would classify an abort as retriable — in
+  // practice `withRetry` still stops because AbortSignal is latching, but the
+  // semantics are wrong and confusing in logs.
   if (
     err instanceof ConfigError ||
     err instanceof SchemaError ||
     err instanceof ValueError ||
-    err instanceof StateError
+    err instanceof StateError ||
+    err instanceof AbortedError
   ) {
     return false;
   }

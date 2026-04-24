@@ -158,6 +158,7 @@ See [docs/divergences.md](./docs/divergences.md) for where the TS SDK intentiona
   - Pluggable `EndpointSelector` (random / round-robin / health-aware with outlier detection), replacing the current fixed random pick
   - Retry-time exclusion of already-failed peers so a single dead endpoint cannot burn the entire retry budget
   - Auto-reconnect wrapper for streaming and bulk writers (re-pick endpoint, rebuild the stream, surface a resumable handle)
+- Off-main-thread Arrow encoding (worker_threads pool) to close the TS↔Go throughput gap on wide-schema bulk — today `rowsToArrowTable` is ~99% of client CPU (see [docs/benchmarking.md](./docs/benchmarking.md))
 - JSON v2 column type (binary JSON encoding)
 - OpenTelemetry instrumentation of the SDK itself (write latency, retries, bulk/stream state as metrics + spans)
 - Browser build via gRPC-Web in a separate `@greptime/ingester-web` package (unary + streaming only; no bulk)

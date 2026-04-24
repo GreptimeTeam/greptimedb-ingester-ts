@@ -250,10 +250,17 @@ export function clientStreamingCall<Req, Res>(
     signal.addEventListener('abort', onAbort, { once: true });
   }
 
+  let finished = false;
   return {
     write: (req: Req) => writeWithBackpressure(call, req),
     finish(): Promise<Res> {
-      call.end();
+      // `call.end()` is idempotent in grpc-js but we still guard so finish()
+      // can be called multiple times safely — callers get the same terminal
+      // promise each time.
+      if (!finished) {
+        finished = true;
+        call.end();
+      }
       return finalPromise;
     },
     cancel(_reason?: unknown): void {

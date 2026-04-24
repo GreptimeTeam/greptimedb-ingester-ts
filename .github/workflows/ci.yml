@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -43,35 +47,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # GitHub `services:` cannot override the image's CMD, but the upstream
-      # `greptime/greptimedb` image ships an entrypoint that prints help and
-      # exits unless a subcommand (`standalone start ...`) is passed. Run the
-      # container manually so we can supply the right command.
-      # Server version is pinned. Bumping it is intentional: review the bump in PR
-      # so any server-behavior change shows up as a deliberate diff, not a flaky CI.
-      - name: Start GreptimeDB
-        env:
-          GREPTIMEDB_VERSION: v1.0.0
-        run: |
-          docker run -d --name greptimedb \
-            -p 4000:4000 -p 4001:4001 -p 4002:4002 \
-            "greptime/greptimedb:${GREPTIMEDB_VERSION}" standalone start \
-              --http-addr 0.0.0.0:4000 \
-              --rpc-bind-addr 0.0.0.0:4001 \
-              --mysql-addr 0.0.0.0:4002
-      - name: Wait for GreptimeDB readiness
-        run: |
-          for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
-              echo "GreptimeDB is ready"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "GreptimeDB failed to become ready"
-          docker logs greptimedb
-          exit 1
-      - run: INTEGRATION=1 pnpm test:integration
+      - uses: ./.github/actions/greptimedb
+        with:
+          container-name: greptimedb
+      - run: pnpm test:integration
         env:
           GREPTIMEDB_ENDPOINT: localhost:4001
           GREPTIMEDB_HTTP: http://127.0.0.1:4000
@@ -97,28 +76,9 @@ jobs:
         with:
           bun-version: latest
       - run: pnpm install --frozen-lockfile
-      - name: Start GreptimeDB
-        env:
-          GREPTIMEDB_VERSION: v1.0.0
-        run: |
-          docker run -d --name greptimedb-bun \
-            -p 4000:4000 -p 4001:4001 -p 4002:4002 \
-            "greptime/greptimedb:${GREPTIMEDB_VERSION}" standalone start \
-              --http-addr 0.0.0.0:4000 \
-              --rpc-bind-addr 0.0.0.0:4001 \
-              --mysql-addr 0.0.0.0:4002
-      - name: Wait for GreptimeDB readiness
-        run: |
-          for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
-              echo "GreptimeDB is ready"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "GreptimeDB failed to become ready"
-          docker logs greptimedb-bun
-          exit 1
+      - uses: ./.github/actions/greptimedb
+        with:
+          container-name: greptimedb-bun
       - run: bun run scripts/smoke.ts
         env:
           GREPTIMEDB_ENDPOINT: localhost:4001
@@ -145,28 +105,9 @@ jobs:
         with:
           deno-version: v2.x
       - run: pnpm install --frozen-lockfile
-      - name: Start GreptimeDB
-        env:
-          GREPTIMEDB_VERSION: v1.0.0
-        run: |
-          docker run -d --name greptimedb-deno \
-            -p 4000:4000 -p 4001:4001 -p 4002:4002 \
-            "greptime/greptimedb:${GREPTIMEDB_VERSION}" standalone start \
-              --http-addr 0.0.0.0:4000 \
-              --rpc-bind-addr 0.0.0.0:4001 \
-              --mysql-addr 0.0.0.0:4002
-      - name: Wait for GreptimeDB readiness
-        run: |
-          for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
-              echo "GreptimeDB is ready"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "GreptimeDB failed to become ready"
-          docker logs greptimedb-deno
-          exit 1
+      - uses: ./.github/actions/greptimedb
+        with:
+          container-name: greptimedb-deno
       - run: deno run -A scripts/smoke.ts
         env:
           GREPTIMEDB_ENDPOINT: localhost:4001

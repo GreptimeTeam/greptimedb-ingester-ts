@@ -198,10 +198,14 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
     case DataType.TimestampMicrosecond:
     case DataType.TimestampNanosecond:
       return scaleTimestamp(v, dt);
+    // Arrow widths diverge from the unary path: Time32[s|ms] is Int32Array-backed so
+    // the setter does `values[i] = value` into an Int32Array and rejects bigints.
+    // Time64[us|ns] is BigInt64Array-backed and requires bigint. Unary always ships
+    // int64 on the wire and happily takes either; the difference is bulk-only.
     case DataType.TimeSecond:
-      return asBigInt('TimeSecond', v, I64_MIN, I64_MAX);
+      return asIntInRange('TimeSecond', v, I32_MIN, I32_MAX);
     case DataType.TimeMillisecond:
-      return asBigInt('TimeMillisecond', v, I64_MIN, I64_MAX);
+      return asIntInRange('TimeMillisecond', v, I32_MIN, I32_MAX);
     case DataType.TimeMicrosecond:
       return asBigInt('TimeMicrosecond', v, I64_MIN, I64_MAX);
     case DataType.TimeNanosecond:

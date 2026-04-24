@@ -16,6 +16,7 @@ import {
   tableToIPC,
   type Schema as ArrowSchema,
 } from 'apache-arrow';
+import { BulkError } from '../errors.js';
 import type { Compressor } from './codec-loader.js';
 import type { CompressionType } from 'apache-arrow/fb/compression-type';
 import { BulkCompression } from './compression.js';
@@ -102,8 +103,48 @@ export interface DoPutResponseJson {
   readonly affected_rows: number;
 }
 
+/**
+ * Parse a DoPut server ack. Validates shape — a silent cast would let a malformed
+ * frame (missing fields, wrong types, integer-as-string) reach `RequestTracker`
+ * with an invalid id, then the ack would go to a non-existent entry and the real
+ * request would hang forever waiting for an ack that never arrives.
+ */
 export function parseDoPutResponse(appMetadata: Uint8Array): DoPutResponseJson {
-  return JSON.parse(TEXT_DECODER.decode(appMetadata)) as DoPutResponseJson;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(TEXT_DECODER.decode(appMetadata));
+  } catch (err) {
+    throw new BulkError('malformed DoPut response app_metadata (invalid JSON)', undefined, err);
+  }
+  if (parsed === null || typeof parsed !== 'object') {
+    throw new BulkError('malformed DoPut response app_metadata (not a JSON object)');
+  }
+  const { request_id, affected_rows } = parsed as {
+    request_id?: unknown;
+    affected_rows?: unknown;
+  };
+  // isSafeInteger rejects fractional, NaN, Infinity, and out-of-2^53-1 values.
+  // Without the integer check, a fractional id (e.g. 1.5) would never match a
+  // pending entry in RequestTracker (keys are int allocated by nextId++) and the
+  // real request would hang forever; a fractional affected_rows would corrupt
+  // the running totalAffectedRows total. Non-negative because both fields are
+  // counts on the wire. The `typeof === 'number'` guard is redundant at runtime
+  // (isSafeInteger already rejects non-numbers) but narrows `unknown` for TS.
+  if (typeof request_id !== 'number' || !Number.isSafeInteger(request_id) || request_id < 0) {
+    throw new BulkError(
+      `malformed DoPut response app_metadata (request_id: ${String(request_id)})`,
+    );
+  }
+  if (
+    typeof affected_rows !== 'number' ||
+    !Number.isSafeInteger(affected_rows) ||
+    affected_rows < 0
+  ) {
+    throw new BulkError(
+      `malformed DoPut response app_metadata (affected_rows: ${String(affected_rows)})`,
+    );
+  }
+  return { request_id, affected_rows };
 }
 
 function pathDescriptor(tableName: string) {

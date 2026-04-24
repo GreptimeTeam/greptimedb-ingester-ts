@@ -1,0 +1,40 @@
+name: Start GreptimeDB
+description: >-
+  Run a pinned greptime/greptimedb container in standalone mode and wait for
+  its HTTP health endpoint. Cleanup is left to the caller (needs job-level
+  `if: always()`, which composite actions cannot express).
+
+inputs:
+  container-name:
+    description: Docker container name to run.
+    required: true
+  version:
+    description: GreptimeDB image tag (override in PR to test against latest).
+    required: false
+    default: v1.0.0
+
+runs:
+  using: composite
+  steps:
+    - name: Run GreptimeDB container
+      shell: bash
+      run: |
+        docker run -d --name "${{ inputs.container-name }}" \
+          -p 4000:4000 -p 4001:4001 -p 4002:4002 \
+          "greptime/greptimedb:${{ inputs.version }}" standalone start \
+            --http-addr 0.0.0.0:4000 \
+            --rpc-bind-addr 0.0.0.0:4001 \
+            --mysql-addr 0.0.0.0:4002
+    - name: Wait for GreptimeDB readiness
+      shell: bash
+      run: |
+        for i in $(seq 1 60); do
+          if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
+            echo "GreptimeDB is ready"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "GreptimeDB failed to become ready"
+        docker logs "${{ inputs.container-name }}"
+        exit 1
