@@ -5,7 +5,9 @@
 //   - RandomSelector       — stateless uniform pick (the default; preserves prior behavior)
 //   - RoundRobinSelector   — stateless rotation via a monotonic counter
 //   - OutlierDetectingSelector — wraps a base selector and ejects endpoints that produce
-//                                consecutive failures (Envoy-style consecutive-5xx ejection)
+//                                consecutive endpoint-level transport failures (Envoy-style
+//                                consecutive-failure ejection; fed by `isEndpointFailure`, never
+//                                by server business errors)
 //
 // `SelectContext.exclude` lets a retry loop steer away from peers that already failed in the
 // current attempt sequence so a single dead endpoint cannot burn the whole retry budget. It is

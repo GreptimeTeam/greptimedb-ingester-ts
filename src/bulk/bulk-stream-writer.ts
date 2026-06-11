@@ -368,6 +368,11 @@ export class BulkStreamWriter {
       }
     } catch (err) {
       this.state = 'errored';
+      // A frame-write transport failure is a direct endpoint-health signal. The drain loop
+      // usually also observes the broken stream, but not if the server already ended the
+      // response stream cleanly (drain completes with no settle, then finish() would settle
+      // success). Settle here so a real write failure can never be reported as healthy.
+      this.settle(err);
       // Reject any still-pending sub-ids; the aggregate forwards the rejection.
       for (const id of subIds) this.tracker.reject(id, err);
       throw err;
