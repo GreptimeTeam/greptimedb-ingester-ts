@@ -17,6 +17,7 @@ export {
   AbortedError,
   BulkError,
   ConfigError,
+  GreptimeStatusCode,
   IngesterError,
   SchemaError,
   ServerError,
@@ -24,9 +25,24 @@ export {
   TimeoutError,
   TransportError,
   ValueError,
+  isEndpointFailure,
   isRetriable,
+  isRetryableStatusCode,
   type RetryMode,
 } from './errors.js';
+
+export {
+  OutlierDetectingSelector,
+  RandomSelector,
+  RoundRobinSelector,
+  outlierDetectingSelector,
+  randomSelector,
+  roundRobinSelector,
+  type EndpointOutcomeHook,
+  type EndpointSelector,
+  type OutlierDetectionOptions,
+  type SelectContext,
+} from './transport/endpoint-selector.js';
 
 export {
   DataType,

@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   AbortedError,
   ConfigError,
+  GreptimeStatusCode,
   SchemaError,
   ServerError,
   StateError,
   TimeoutError,
   TransportError,
   ValueError,
+  isEndpointFailure,
   isRetriable,
+  isRetryableStatusCode,
 } from '../../src/index.js';
 
 describe('isRetriable', () => {
@@ -31,10 +34,27 @@ describe('isRetriable', () => {
     }
   });
 
-  it('aggressive mode matches Rust is_retriable — everything else is retriable', () => {
+  it('aggressive mode retries transport / timeout errors', () => {
     expect(isRetriable(new TransportError('x', 13), 'aggressive')).toBe(true);
-    expect(isRetriable(new ServerError('x', 500), 'aggressive')).toBe(true);
     expect(isRetriable(new TimeoutError('x'), 'aggressive')).toBe(true);
+  });
+
+  it('classifies ServerError by GreptimeDB status code in both modes', () => {
+    for (const mode of ['aggressive', 'conservative'] as const) {
+      expect(isRetriable(new ServerError('busy', GreptimeStatusCode.RegionBusy), mode)).toBe(true);
+      expect(
+        isRetriable(new ServerError('unavailable', GreptimeStatusCode.TableUnavailable), mode),
+      ).toBe(true);
+      // Business errors never retry, even under aggressive.
+      expect(isRetriable(new ServerError('bad', GreptimeStatusCode.InvalidArguments), mode)).toBe(
+        false,
+      );
+      expect(isRetriable(new ServerError('gone', GreptimeStatusCode.TableNotFound), mode)).toBe(
+        false,
+      );
+      // Internal is deliberately excluded from the retryable set.
+      expect(isRetriable(new ServerError('boom', GreptimeStatusCode.Internal), mode)).toBe(false);
+    }
   });
 
   it('conservative mode only retries transient gRPC codes', () => {
@@ -46,9 +66,6 @@ describe('isRetriable', () => {
     for (const code of [5, 7, 3, 13, 16]) {
       expect(isRetriable(new TransportError('x', code), 'conservative')).toBe(false);
     }
-    // ServerError is not retried under conservative
-    expect(isRetriable(new ServerError('x', 500), 'conservative')).toBe(false);
-    // Timeout is retried
     expect(isRetriable(new TimeoutError('x'), 'conservative')).toBe(true);
   });
 
@@ -56,5 +73,55 @@ describe('isRetriable', () => {
     expect(isRetriable(new Error('random'))).toBe(false);
     expect(isRetriable('string error')).toBe(false);
     expect(isRetriable(null)).toBe(false);
+  });
+});
+
+describe('isRetryableStatusCode', () => {
+  it('matches the GreptimeDB is_retryable set (minus Internal)', () => {
+    const retryable = [
+      GreptimeStatusCode.RegionNotReady,
+      GreptimeStatusCode.RegionBusy,
+      GreptimeStatusCode.TableUnavailable,
+      GreptimeStatusCode.StorageUnavailable,
+      GreptimeStatusCode.RuntimeResourcesExhausted,
+    ];
+    for (const code of retryable) expect(isRetryableStatusCode(code)).toBe(true);
+
+    const notRetryable = [
+      GreptimeStatusCode.Success,
+      GreptimeStatusCode.Internal,
+      GreptimeStatusCode.InvalidArguments,
+      GreptimeStatusCode.TableNotFound,
+      GreptimeStatusCode.PermissionDenied,
+      GreptimeStatusCode.RateLimited,
+    ];
+    for (const code of notRetryable) expect(isRetryableStatusCode(code)).toBe(false);
+  });
+});
+
+describe('isEndpointFailure', () => {
+  it('treats only transport connectivity / capacity errors and timeouts as endpoint failures', () => {
+    // UNAVAILABLE, RESOURCE_EXHAUSTED, DEADLINE_EXCEEDED
+    for (const code of [14, 8, 4]) {
+      expect(isEndpointFailure(new TransportError('down', code))).toBe(true);
+    }
+    expect(isEndpointFailure(new TimeoutError('slow'))).toBe(true);
+    // Other transport codes (NOT_FOUND, INVALID_ARGUMENT, UNKNOWN) are request-level.
+    for (const code of [5, 3, 2, 7]) {
+      expect(isEndpointFailure(new TransportError('x', code))).toBe(false);
+    }
+  });
+
+  it('never ejects an endpoint for a server business error, even a retriable one', () => {
+    expect(isEndpointFailure(new ServerError('busy', GreptimeStatusCode.RegionBusy))).toBe(false);
+    expect(isEndpointFailure(new ServerError('gone', GreptimeStatusCode.TableNotFound))).toBe(
+      false,
+    );
+  });
+
+  it('ignores foreign and local errors', () => {
+    expect(isEndpointFailure(new Error('random'))).toBe(false);
+    expect(isEndpointFailure(new ConfigError('bad'))).toBe(false);
+    expect(isEndpointFailure(null)).toBe(false);
   });
 });

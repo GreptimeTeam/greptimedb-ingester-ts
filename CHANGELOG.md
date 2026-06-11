@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Pluggable `EndpointSelector` for multi-endpoint failover: `RandomSelector` (default), `RoundRobinSelector`, and `OutlierDetectingSelector` (Envoy-style consecutive-failure ejection with exponential back-off). Configure via `ConfigBuilder.withEndpointSelector()`; factory helpers `randomSelector()` / `roundRobinSelector()` / `outlierDetectingSelector()`.
+- Retry-time exclusion of already-failed peers: within a single `write()` retry sequence, a peer that just failed is excluded so one dead endpoint cannot burn the whole retry budget.
+- `GreptimeStatusCode` enum and `isRetryableStatusCode()` mirroring GreptimeDB's `status_code.rs`. `StreamWriter` / `BulkStreamWriter` now expose `endpoint`.
+
+### Changed
+
+- `ServerError` retriability is now classified by GreptimeDB status code in both retry modes (only the transient codes — `RegionNotReady`, `RegionBusy`, `TableUnavailable`, `StorageUnavailable`, `RuntimeResourcesExhausted` — retry; `Internal` and all business errors do not), instead of aggressive mode retrying every `ServerError`.
+- Outlier detection is fed only by endpoint-level transport failures (`isEndpointFailure`); server business errors never eject a healthy endpoint. Streaming/bulk remain non-auto-retried — rebuild by calling `createStreamWriter()` / `createBulkStreamWriter()` again, which re-picks an endpoint via the selector.
+
 ## [0.1.0] — 2026-04-24
 
 Initial public release.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigBuilder, ConfigError } from '../../src/index.js';
+import { ConfigBuilder, ConfigError, RandomSelector, RoundRobinSelector } from '../../src/index.js';
 
 describe('ConfigBuilder', () => {
   it('builds a minimal config with defaults', () => {
@@ -11,6 +11,13 @@ describe('ConfigBuilder', () => {
     expect(cfg.maxReceiveMessageSize).toBe(128 * 1024 * 1024);
     expect(cfg.auth).toBeUndefined();
     expect(cfg.tls).toBeUndefined();
+    expect(cfg.endpointSelector).toBeInstanceOf(RandomSelector);
+  });
+
+  it('threads a custom endpoint selector', () => {
+    const selector = new RoundRobinSelector();
+    const cfg = ConfigBuilder.create('localhost:4001').withEndpointSelector(selector).build();
+    expect(cfg.endpointSelector).toBe(selector);
   });
 
   it('threads chained options', () => {

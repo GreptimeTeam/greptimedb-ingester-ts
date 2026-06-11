@@ -11,7 +11,8 @@ Official TypeScript ingester SDK for [GreptimeDB](https://github.com/GreptimeTea
 
 - Three write modes on one `Client`: unary, streaming, and Arrow Flight bulk with LZ4 / ZSTD body compression
 - Stage-3 decorators (TS 5) for object mapping — no `reflect-metadata`
-- TLS (system / PEM / file), basic auth, gzip transport compression, random-peer load balancing
+- TLS (system / PEM / file), basic auth, gzip transport compression
+- Multi-endpoint failover: pluggable `EndpointSelector` (random / round-robin / health-aware outlier detection) with retry-time exclusion of failed peers
 - Configurable retry (`aggressive` / `conservative`) with full-jitter exponential backoff + `AbortSignal`
 - Dual ESM + CJS, strict TypeScript, Node.js ≥ 20
 
@@ -113,7 +114,7 @@ Full reference: [docs/configuration.md](./docs/configuration.md).
 
 All errors extend `IngesterError`. Non-retriable: `ConfigError`, `SchemaError`, `ValueError`, `StateError`, `AbortedError`. Retriable or case-by-case: `TransportError` (`.grpcCode`), `ServerError` (`.statusCode`), `TimeoutError`, `BulkError`.
 
-Classify with `isRetriable(err, 'aggressive' | 'conservative')`. Default is `aggressive` and mirrors the Rust SDK; `conservative` narrows to transient gRPC codes only.
+Classify with `isRetriable(err, 'aggressive' | 'conservative')`. Default is `aggressive`: it retries runtime SDK errors broadly, while `ServerError` is classified by GreptimeDB status code. `conservative` narrows transport retry to transient gRPC codes.
 
 ## Examples
 
@@ -125,7 +126,7 @@ Classify with `isRetriable(err, 'aggressive' | 'conservative')`. Default is `agg
 | [`examples/04-bulk-insert.ts`](./examples/04-bulk-insert.ts)                           | Unary bootstrap → bulk 100k rows                                |
 | [`examples/05-bulk-compression-lz4.ts`](./examples/05-bulk-compression-lz4.ts)         | LZ4 frame compression on the bulk path                          |
 | [`examples/06-auth-and-tls.ts`](./examples/06-auth-and-tls.ts)                         | Basic auth + TLS config                                         |
-| [`examples/07-multi-endpoint-lb.ts`](./examples/07-multi-endpoint-lb.ts)               | Multiple endpoints, random LB                                   |
+| [`examples/07-multi-endpoint-lb.ts`](./examples/07-multi-endpoint-lb.ts)               | Multiple endpoints, outlier detection + stream rebuild          |
 | [`examples/08-abort-and-retry.ts`](./examples/08-abort-and-retry.ts)                   | `AbortSignal` + conservative retry                              |
 
 Run any of them with `pnpm example <name>` after `./scripts/run-greptimedb.sh` starts a local server.
@@ -152,12 +153,29 @@ On the 22-column log schema the bulk path reaches **~137k rows/s** (2M rows, bat
 
 See [docs/divergences.md](./docs/divergences.md) for where the TS SDK intentionally differs from the Rust / Go SDKs.
 
+## Endpoint selection & failover
+
+With multiple endpoints, every unary call is routed through a pluggable `EndpointSelector`:
+
+```ts
+import { Client, roundRobinSelector, outlierDetectingSelector } from '@greptime/ingester';
+
+const client = new Client(
+  Client.create('host1:4001')
+    .withEndpoints('host2:4001', 'host3:4001')
+    // default is random; or roundRobinSelector(), or:
+    .withEndpointSelector(outlierDetectingSelector({ consecutiveFailures: 5 }))
+    .build(),
+);
+```
+
+- **Random** (default), **round-robin**, or **outlier-detecting** (ejects an endpoint after consecutive transport failures, re-admits it after an exponential back-off window).
+- **Retry-time exclusion**: within a single `write()`'s retry sequence, a peer that just failed is excluded so one dead endpoint can't burn the whole retry budget.
+- Only endpoint-level transport failures feed outlier detection — a server business error (e.g. `RegionBusy`, `TableNotFound`) never ejects a healthy frontend.
+- **Streaming and bulk are not auto-retried.** On a transport error the session is dead; "rebuild" is simply calling `createStreamWriter()` / `createBulkStreamWriter()` again — the selector re-picks a healthy peer. See [`examples/07-multi-endpoint-lb.ts`](./examples/07-multi-endpoint-lb.ts).
+
 ## Roadmap
 
-- Multi-endpoint failover
-  - Pluggable `EndpointSelector` (random / round-robin / health-aware with outlier detection), replacing the current fixed random pick
-  - Retry-time exclusion of already-failed peers so a single dead endpoint cannot burn the entire retry budget
-  - Auto-reconnect wrapper for streaming and bulk writers (re-pick endpoint, rebuild the stream, surface a resumable handle)
 - Off-main-thread Arrow encoding (worker_threads pool) to close the TS↔Go throughput gap on wide-schema bulk — today `rowsToArrowTable` is ~99% of client CPU (see [docs/benchmarking.md](./docs/benchmarking.md))
 - JSON v2 column type (binary JSON encoding)
 - OpenTelemetry instrumentation of the SDK itself (write latency, retries, bulk/stream state as metrics + spans)

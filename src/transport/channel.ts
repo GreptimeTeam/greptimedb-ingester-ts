@@ -126,16 +126,3 @@ export class ChannelPool {
     return this._closed;
   }
 }
-
-/**
- * Random-peer selector. No health probing, gRPC's
- * own state machine handles reconnection and failover.
- * TODO(dennis): support a custom load balancer
- */
-export function pickRandom<T>(items: readonly T[]): T {
-  if (items.length === 0) {
-    throw new ConfigError('no endpoints available');
-  }
-  const idx = Math.floor(Math.random() * items.length);
-  return items[idx] as T;
-}
