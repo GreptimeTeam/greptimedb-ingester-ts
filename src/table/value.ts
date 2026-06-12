@@ -4,8 +4,10 @@
 
 import { create } from '@bufbuild/protobuf';
 import { ValueSchema, type Value } from '../generated/greptime/v1/row_pb.js';
+import { Decimal128Schema } from '../generated/greptime/v1/common_pb.js';
 import { ValueError } from '../errors.js';
 import { DataType } from './data-type.js';
+import type { DecimalSpec } from './schema.js';
 import {
   I64_MAX,
   I64_MIN,
@@ -17,6 +19,8 @@ import {
   asNumber,
   asString,
   dateToMs,
+  decimal128Parts,
+  decimalToUnscaled,
   safeStringifyJson,
 } from './validators.js';
 
@@ -63,7 +67,7 @@ function asTimestamp(name: string, v: unknown, dataType: DataType): bigint {
  * (the protobuf encoding of "null" for row-insert) — callers must reject null-on-non-nullable
  * columns before reaching this layer if the server schema forbids nulls.
  */
-export function toProtoValue(ts: unknown, dataType: DataType): Value {
+export function toProtoValue(ts: unknown, dataType: DataType, decimal?: DecimalSpec): Value {
   if (ts === null || ts === undefined) return EMPTY_VALUE;
 
   switch (dataType) {
@@ -186,6 +190,20 @@ export function toProtoValue(ts: unknown, dataType: DataType): Value {
       // `safeStringifyJson` wraps native `TypeError` (bigint / circular) as `ValueError`.
       return create(ValueSchema, {
         valueData: { case: 'stringValue', value: safeStringifyJson(ts) },
+      });
+    }
+    case DataType.Decimal128: {
+      if (!decimal) {
+        throw new ValueError('Decimal128 column is missing precision/scale metadata');
+      }
+      const unscaled = decimalToUnscaled(
+        ts as string | number | bigint,
+        decimal.precision,
+        decimal.scale,
+      );
+      const { hi, lo } = decimal128Parts(unscaled);
+      return create(ValueSchema, {
+        valueData: { case: 'decimal128Value', value: create(Decimal128Schema, { hi, lo }) },
       });
     }
   }

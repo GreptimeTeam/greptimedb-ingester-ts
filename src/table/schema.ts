@@ -6,6 +6,15 @@ export interface ColumnSpec {
   readonly dataType: DataType;
   readonly semantic: Semantic;
   readonly precision?: Precision;
+  /** Required for `DataType.Decimal128`; ignored for every other type. */
+  readonly decimal?: DecimalSpec;
+}
+
+export interface DecimalSpec {
+  /** Total number of significant digits, 1..38. */
+  readonly precision: number;
+  /** Number of digits to the right of the decimal point, 0..precision. */
+  readonly scale: number;
 }
 
 /**

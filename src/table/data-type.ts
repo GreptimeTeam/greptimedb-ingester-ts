@@ -34,6 +34,12 @@ export const DataType = {
   TimeMicrosecond: 'TimeMicrosecond',
   TimeNanosecond: 'TimeNanosecond',
   Json: 'Json',
+  /**
+   * Fixed-point decimal backed by a 128-bit integer. A column of this type carries
+   * `precision`/`scale` metadata (see `ColumnSpec.decimal`) that the encoder ships as a
+   * proto `DecimalTypeExtension`. Only supported on the unary/streaming write paths.
+   */
+  Decimal128: 'Decimal128',
 } as const;
 
 export type DataType = (typeof DataType)[keyof typeof DataType];
@@ -135,5 +141,7 @@ export function toProtoDataType(t: DataType): ColumnDataType {
       return ColumnDataType.TIME_NANOSECOND;
     case DataType.Json:
       return ColumnDataType.JSON;
+    case DataType.Decimal128:
+      return ColumnDataType.DECIMAL128;
   }
 }
