@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { DataType, SchemaError, Table, ValueError } from '../../src/index.js';
+import { DataType, SchemaError, Table, ValueError, validateTableSchema } from '../../src/index.js';
 import { toProtoValue } from '../../src/table/value.js';
 import { decimal128Parts, decimalToUnscaled } from '../../src/table/validators.js';
+import type { TableSchema } from '../../src/table/schema.js';
 
 const D = { precision: 38, scale: 12 } as const;
 
@@ -33,6 +34,7 @@ describe('decimalToUnscaled', () => {
     expect(decimalToUnscaled('1e-7', 38, 12)).toBe(100000n);
     expect(decimalToUnscaled(1e-7, 38, 12)).toBe(100000n);
     expect(decimalToUnscaled('1.5e3', 38, 12)).toBe(1500000000000000n);
+    expect(decimalToUnscaled('+1e2', 38, 12)).toBe(100000000000000n);
     // Leading-dot scientific notation: .5e1 == 5.
     expect(decimalToUnscaled('.5e1', 38, 12)).toBe(5000000000000n);
   });
@@ -77,6 +79,62 @@ describe('Table.addDecimalFieldColumn', () => {
 
   it('accepts valid precision/scale', () => {
     expect(() => Table.new('t').addDecimalFieldColumn('d', 38, 12)).not.toThrow();
+  });
+});
+
+describe('validateTableSchema Decimal128', () => {
+  const baseColumns = [
+    { name: 'host', dataType: DataType.String, semantic: 'tag' as const },
+    { name: 'ts', dataType: DataType.TimestampMillisecond, semantic: 'timestamp' as const },
+  ];
+
+  it('rejects hand-written Decimal128 schemas without precision/scale', () => {
+    const schema: TableSchema = {
+      tableName: 't',
+      columns: [...baseColumns, { name: 'd', dataType: DataType.Decimal128, semantic: 'field' }],
+    };
+
+    expect(() => {
+      validateTableSchema(schema);
+    }).toThrow(SchemaError);
+  });
+
+  it('rejects invalid hand-written Decimal128 precision/scale', () => {
+    const schema: TableSchema = {
+      tableName: 't',
+      columns: [
+        ...baseColumns,
+        {
+          name: 'd',
+          dataType: DataType.Decimal128,
+          semantic: 'field',
+          decimal: { precision: 39, scale: 2 },
+        },
+      ],
+    };
+
+    expect(() => {
+      validateTableSchema(schema);
+    }).toThrow(SchemaError);
+  });
+
+  it('rejects decimal metadata on non-Decimal128 columns', () => {
+    const schema: TableSchema = {
+      tableName: 't',
+      columns: [
+        ...baseColumns,
+        {
+          name: 'v',
+          dataType: DataType.Float64,
+          semantic: 'field',
+          decimal: { precision: 10, scale: 2 },
+        },
+      ],
+    };
+
+    expect(() => {
+      validateTableSchema(schema);
+    }).toThrow(SchemaError);
   });
 });
 

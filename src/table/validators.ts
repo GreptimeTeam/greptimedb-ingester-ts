@@ -136,7 +136,7 @@ const MAX_DECIMAL_EXPANSION = 1024;
 function expandExponent(s: string): string {
   // `\d*` (not `\d+`) on the integer part so leading-dot forms like ".5e1" expand too; an
   // empty mantissa ("e5", ".e5") is left for the caller's parser to reject.
-  const m = /^(-?)(\d*)(?:\.(\d*))?[eE]([+-]?\d+)$/.exec(s);
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?[eE]([+-]?\d+)$/.exec(s);
   if (!m) return s;
   const sign = m[1] ?? '';
   const intPart = m[2] ?? '';

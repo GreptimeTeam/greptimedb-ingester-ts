@@ -1,5 +1,6 @@
 import { SchemaError } from '../errors.js';
-import type { DataType, Precision, Semantic } from './data-type.js';
+import { DataType, type Precision, type Semantic } from './data-type.js';
+import { isValidDecimalParams } from './validators.js';
 
 export interface ColumnSpec {
   readonly name: string;
@@ -42,6 +43,23 @@ export function validateTableSchema(schema: TableSchema): void {
       throw new SchemaError(`table "${schema.tableName}" has duplicate column "${c.name}"`);
     }
     seen.add(c.name);
+    if (c.dataType === DataType.Decimal128) {
+      if (c.decimal === undefined) {
+        throw new SchemaError(
+          `Decimal128 column "${c.name}" requires precision/scale; use addDecimalFieldColumn()`,
+        );
+      }
+      if (!isValidDecimalParams(c.decimal.precision, c.decimal.scale)) {
+        throw new SchemaError(
+          `Decimal128 column "${c.name}" has invalid precision/scale (precision=${c.decimal.precision}, ` +
+            `scale=${c.decimal.scale}); require 1<=precision<=38 and 0<=scale<=precision`,
+        );
+      }
+    } else if (c.decimal !== undefined) {
+      throw new SchemaError(
+        `column "${c.name}" carries decimal metadata but is not a Decimal128 column`,
+      );
+    }
     if (c.semantic === 'timestamp') timestampCount++;
   }
   if (timestampCount !== 1) {
