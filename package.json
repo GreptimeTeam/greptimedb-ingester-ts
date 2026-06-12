@@ -64,6 +64,7 @@
   "module": "./dist/esm/index.js",
   "scripts": {
     "build": "tshy",
+    "prepare": "tshy",
     "clean": "rimraf dist .tshy .tshy-build",
     "codegen": "buf generate",
     "codegen:check": "pnpm codegen && git diff --exit-code src/generated",
