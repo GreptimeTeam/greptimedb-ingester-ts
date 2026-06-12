@@ -7,7 +7,7 @@ export interface ColumnSpec {
   readonly dataType: DataType;
   readonly semantic: Semantic;
   readonly precision?: Precision;
-  /** Required for `DataType.Decimal128`; ignored for every other type. */
+  /** Required for `DataType.Decimal128`; must be `undefined` for every other type. */
   readonly decimal?: DecimalSpec;
 }
 
