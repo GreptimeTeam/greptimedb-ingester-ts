@@ -50,6 +50,7 @@ export {
   Table,
   validateTableSchema,
   type ColumnSpec,
+  type DecimalSpec,
   type Semantic,
   type TableSchema,
 } from './table/index.js';

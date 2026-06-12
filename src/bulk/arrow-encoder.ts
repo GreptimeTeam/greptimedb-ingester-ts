@@ -122,6 +122,10 @@ function arrowTypeFor(dt: DataType): ArrowDataType {
       return new TimeNanosecond();
     case DataType.Json:
       return new Binary();
+    case DataType.Decimal128:
+      throw new ValueError(
+        'Decimal128 is not supported on the bulk Arrow path; use the unary or streaming write',
+      );
   }
 }
 
@@ -212,6 +216,10 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
       return asBigInt('TimeNanosecond', v, I64_MIN, I64_MAX);
     case DataType.Json:
       return TEXT_ENCODER.encode(safeStringifyJson(v));
+    case DataType.Decimal128:
+      throw new ValueError(
+        'Decimal128 is not supported on the bulk Arrow path; use the unary or streaming write',
+      );
   }
 }
 

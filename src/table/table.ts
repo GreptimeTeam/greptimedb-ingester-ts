@@ -1,11 +1,12 @@
 import { SchemaError } from '../errors.js';
 import {
+  DataType,
   Precision,
   isTimestampDataType,
   precisionToTimestampDataType,
-  type DataType,
 } from './data-type.js';
 import { validateTableSchema, type ColumnSpec, type TableSchema } from './schema.js';
+import { isValidDecimalParams } from './validators.js';
 
 /**
  * Table builder — accumulates column definitions and rows, then hands off to the writer.
@@ -43,6 +44,26 @@ export class Table {
   }
 
   /**
+   * Add a `DECIMAL(precision, scale)` FIELD column. Values are passed as decimal strings
+   * (recommended for exactness), numbers, or bigints; the encoder ships them as a 128-bit
+   * unscaled integer. Only supported on the unary/streaming write paths.
+   */
+  public addDecimalFieldColumn(name: string, precision: number, scale: number): this {
+    if (!isValidDecimalParams(precision, scale)) {
+      throw new SchemaError(
+        `Decimal128 column "${name}" has invalid precision/scale (precision=${precision}, ` +
+          `scale=${scale}); require 1<=precision<=38 and 0<=scale<=precision`,
+      );
+    }
+    return this.addColumn({
+      name,
+      dataType: DataType.Decimal128,
+      semantic: 'field',
+      decimal: { precision, scale },
+    });
+  }
+
+  /**
    * Add the TIMESTAMP column. Exactly one per table is required. Default precision is
    * millisecond, matching Go's `types.TIMESTAMP_MILLISECOND` default.
    */
@@ -60,6 +81,16 @@ export class Table {
     if (spec.semantic === 'timestamp' && !isTimestampDataType(spec.dataType)) {
       throw new SchemaError(
         `timestamp column "${spec.name}" requires a Timestamp* dataType, got ${spec.dataType}`,
+      );
+    }
+    if (spec.dataType === DataType.Decimal128 && spec.decimal === undefined) {
+      throw new SchemaError(
+        `Decimal128 column "${spec.name}" requires precision/scale; use addDecimalFieldColumn()`,
+      );
+    }
+    if (spec.decimal !== undefined && spec.dataType !== DataType.Decimal128) {
+      throw new SchemaError(
+        `column "${spec.name}" carries decimal metadata but is not a Decimal128 column`,
       );
     }
     if (this._columns.some((c) => c.name === spec.name)) {

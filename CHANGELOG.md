@@ -4,6 +4,7 @@
 
 ### Added
 
+- `DataType.Decimal128` write support on the unary/streaming paths: `Table.addDecimalFieldColumn(name, precision, scale)` ships a proto `DecimalTypeExtension` so auto-create produces a `DECIMAL(precision, scale)` column. Values accept decimal strings (exact), numbers, or bigints; excess fractional digits round half-up. Unsupported on the bulk Arrow path (throws `ValueError`).
 - Pluggable `EndpointSelector` for multi-endpoint failover: `RandomSelector` (default), `RoundRobinSelector`, and `OutlierDetectingSelector` (Envoy-style consecutive-failure ejection with exponential back-off). Configure via `ConfigBuilder.withEndpointSelector()`; factory helpers `randomSelector()` / `roundRobinSelector()` / `outlierDetectingSelector()`.
 - Retry-time exclusion of already-failed peers: within a single `write()` retry sequence, a peer that just failed is excluded so one dead endpoint cannot burn the whole retry budget.
 - `GreptimeStatusCode` enum and `isRetryableStatusCode()` mirroring GreptimeDB's `status_code.rs`. `StreamWriter` / `BulkStreamWriter` now expose `endpoint`.

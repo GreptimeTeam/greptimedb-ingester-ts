@@ -123,6 +123,134 @@ export const U64_MIN = 0n;
 export const U64_MAX = (1n << 64n) - 1n;
 
 /**
+ * Expand an exponential decimal string (e.g. `"1e-7"`, `"1.5E3"`) into plain form. Both
+ * `String(1e-7)` and decimal.js `.toString()` can emit exponential notation, which the strict
+ * decimal parser would otherwise reject. Pass-through when there is no exponent.
+ */
+// Upper bound on zero-padding when expanding exponential notation. Any value needing more
+// digits than this cannot fit DECIMAL(<=38, <=38), so the cap rejects crafted exponents
+// (e.g. "1e1000000000") that would otherwise allocate a multi-GB string before the range
+// check could reject them.
+const MAX_DECIMAL_EXPANSION = 1024;
+
+function expandExponent(s: string): string {
+  // `\d*` (not `\d+`) on the integer part so leading-dot forms like ".5e1" expand too; an
+  // empty mantissa ("e5", ".e5") is left for the caller's parser to reject.
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?[eE]([+-]?\d+)$/.exec(s);
+  if (!m) return s;
+  const sign = m[1] ?? '';
+  const intPart = m[2] ?? '';
+  const fracPart = m[3] ?? '';
+  if (intPart === '' && fracPart === '') return s;
+  const exp = parseInt(m[4] ?? '0', 10);
+  const digits = intPart + fracPart;
+  // Position of the decimal point measured from the left, after applying the exponent.
+  const pointPos = intPart.length + exp;
+  const pad = pointPos <= 0 ? -pointPos : pointPos - digits.length;
+  if (pad > MAX_DECIMAL_EXPANSION) {
+    throw new ValueError(`Decimal128 exponent in "${s}" is out of range`);
+  }
+  if (pointPos <= 0) {
+    return `${sign}0.${'0'.repeat(-pointPos)}${digits}`;
+  }
+  if (pointPos >= digits.length) {
+    return `${sign}${digits}${'0'.repeat(pointPos - digits.length)}`;
+  }
+  return `${sign}${digits.slice(0, pointPos)}.${digits.slice(pointPos)}`;
+}
+
+/** Decimal128 precision/scale rule: integers with `1<=precision<=38` and `0<=scale<=precision`. */
+export function isValidDecimalParams(precision: number, scale: number): boolean {
+  return (
+    Number.isInteger(precision) &&
+    Number.isInteger(scale) &&
+    precision >= 1 &&
+    precision <= 38 &&
+    scale >= 0 &&
+    scale <= precision
+  );
+}
+
+function decimalDigitCount(n: bigint): number {
+  const abs = n < 0n ? -n : n;
+  return abs === 0n ? 0 : abs.toString().length;
+}
+
+/**
+ * Convert a decimal value to the unscaled 128-bit integer that GreptimeDB stores for a
+ * `DECIMAL(precision, scale)` column (i.e. `round(value * 10^scale)`). Strings are parsed
+ * exactly; numbers are stringified via `String(value)` then {@link expandExponent} (a `number`
+ * may already have lost precision before reaching us). Excess fractional digits are rounded
+ * half-up on the magnitude (away from zero for negatives, matching Java `BigDecimal.HALF_UP`).
+ */
+export function decimalToUnscaled(
+  value: string | number | bigint,
+  precision: number,
+  scale: number,
+): bigint {
+  if (!isValidDecimalParams(precision, scale)) {
+    throw new ValueError(
+      `Decimal128 invalid precision/scale (precision=${precision}, scale=${scale}); require 1<=precision<=38 and 0<=scale<=precision`,
+    );
+  }
+
+  let s: string;
+  if (typeof value === 'bigint') {
+    s = value.toString();
+  } else if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new ValueError(`Decimal128 expected a finite number, got ${value}`);
+    }
+    s = expandExponent(String(value));
+  } else if (typeof value === 'string') {
+    s = expandExponent(value.trim());
+  } else {
+    throw new ValueError(`Decimal128 expected string|number|bigint, got ${typeof value}`);
+  }
+
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(s);
+  if (!m || ((m[2] ?? '') === '' && (m[3] ?? '') === '')) {
+    throw new ValueError(`Decimal128 cannot parse "${value}" as a decimal`);
+  }
+  const negative = m[1] === '-';
+  const intPart = m[2] ?? '';
+  const fracPart = m[3] ?? '';
+
+  let magnitude: bigint;
+  if (fracPart.length <= scale) {
+    magnitude = BigInt(`${intPart}${fracPart}${'0'.repeat(scale - fracPart.length)}` || '0');
+  } else {
+    // More fractional digits than the column scale: keep `scale` digits, round half-up
+    // on the first dropped digit.
+    const kept = fracPart.slice(0, scale);
+    const roundDigit = fracPart.charCodeAt(scale) - 48;
+    magnitude = BigInt(`${intPart}${kept}` || '0');
+    if (roundDigit >= 5) magnitude += 1n;
+  }
+
+  const unscaled = negative ? -magnitude : magnitude;
+  if (decimalDigitCount(unscaled) > precision) {
+    throw new ValueError(
+      `Decimal128 value "${value}" exceeds DECIMAL(${precision}, ${scale}) range`,
+    );
+  }
+  return unscaled;
+}
+
+/**
+ * Split a signed unscaled integer into the proto `Decimal128 { hi, lo }` pair. `hi`/`lo`
+ * are the high/low 64 bits of the two's-complement 128-bit representation, each carried as a
+ * signed int64 on the wire (the server reinterprets `lo` as unsigned when reconstructing).
+ */
+export function decimal128Parts(unscaled: bigint): { hi: bigint; lo: bigint } {
+  const u128 = BigInt.asUintN(128, unscaled);
+  return {
+    lo: BigInt.asIntN(64, u128),
+    hi: BigInt.asIntN(64, u128 >> 64n),
+  };
+}
+
+/**
  * Return `Date.getTime()` as a finite number or throw `ValueError`. A `Date`
  * constructed from bad input (e.g. `new Date('not a date')`) has `.getTime()`
  * === NaN, which silently pollutes downstream arithmetic: `BigInt(NaN)` throws

@@ -15,8 +15,12 @@ import {
   type RowInsertRequest,
   type RowInsertRequests,
 } from '../generated/greptime/v1/database_pb.js';
+import {
+  ColumnDataTypeExtensionSchema,
+  DecimalTypeExtensionSchema,
+} from '../generated/greptime/v1/common_pb.js';
 import { SchemaError } from '../errors.js';
-import { toProtoDataType, toProtoSemanticType } from '../table/data-type.js';
+import { DataType, toProtoDataType, toProtoSemanticType } from '../table/data-type.js';
 import { toProtoValue } from '../table/value.js';
 import type { Table } from '../table/table.js';
 
@@ -27,6 +31,19 @@ export function encodeTable(table: Table): RowInsertRequest {
       columnName: spec.name,
       datatype: toProtoDataType(spec.dataType),
       semanticType: toProtoSemanticType(spec.semantic),
+      ...(spec.dataType === DataType.Decimal128 && spec.decimal
+        ? {
+            datatypeExtension: create(ColumnDataTypeExtensionSchema, {
+              typeExt: {
+                case: 'decimalType',
+                value: create(DecimalTypeExtensionSchema, {
+                  precision: spec.decimal.precision,
+                  scale: spec.decimal.scale,
+                }),
+              },
+            }),
+          }
+        : {}),
     }),
   );
   const rows: Row[] = table.rows().map((rowValues) => {
@@ -35,7 +52,7 @@ export function encodeTable(table: Table): RowInsertRequest {
       if (spec === undefined) {
         throw new SchemaError(`internal: row has more values than columns (col ${colIdx})`);
       }
-      return toProtoValue(v, spec.dataType);
+      return toProtoValue(v, spec.dataType, spec.decimal);
     });
     return create(RowSchema, { values });
   });
