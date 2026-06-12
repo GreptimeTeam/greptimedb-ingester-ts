@@ -16,6 +16,7 @@ import { BulkError } from '../errors.js';
 import type { FlightData, PutResult } from '../generated/arrow/flight/Flight_pb.js';
 import { DoPutMethod } from '../transport/grpc-services.js';
 import type { Channel } from '../transport/channel.js';
+import type { EndpointOutcomeHook } from '../transport/endpoint-selector.js';
 import { bidiStreamingCall, type BidiStreamingCall } from '../transport/promise-adapter.js';
 import { buildFlightMetadata } from '../auth.js';
 import { validateTableSchema, type TableSchema } from '../table/schema.js';
@@ -86,7 +87,10 @@ type SettledGroup =
   | { readonly ok: false; readonly error: unknown };
 
 export class BulkStreamWriter {
+  public readonly endpoint: string;
   private readonly call: BidiStreamingCall<FlightData, PutResult>;
+  private readonly onSettle: EndpointOutcomeHook | undefined;
+  private settled = false;
   private readonly tracker = new RequestTracker();
   private readonly semaphore: Semaphore;
   private readonly schema: TableSchema;
@@ -118,8 +122,11 @@ export class BulkStreamWriter {
     cfg: ClientConfig,
     schema: TableSchema,
     opts: BulkWriteOptions | undefined,
+    onSettle?: EndpointOutcomeHook,
   ) {
     validateTableSchema(schema);
+    this.endpoint = channel.endpoint;
+    this.onSettle = onSettle;
     this.compressionCodec = opts?.compression ?? BulkCompression.None;
     this.schema = schema;
     this.logger = cfg.logger ?? NOOP_LOGGER;
@@ -155,6 +162,7 @@ export class BulkStreamWriter {
     cfg: ClientConfig,
     schema: TableSchema,
     opts: BulkWriteOptions | undefined,
+    onSettle?: EndpointOutcomeHook,
   ): Promise<BulkStreamWriter> {
     // Resolve the native compressor BEFORE opening the bidi gRPC stream. Loading
     // `lz4-napi`/`@mongodb-js/zstd` takes ~1s on first use; if we opened the stream
@@ -163,7 +171,7 @@ export class BulkStreamWriter {
     // surfaces a missing optional dep as ConfigError before any network work happens.
     const codec = opts?.compression ?? BulkCompression.None;
     const resolved = await resolveCompressor(codec);
-    const w = new BulkStreamWriter(channel, cfg, schema, opts);
+    const w = new BulkStreamWriter(channel, cfg, schema, opts, onSettle);
     if (resolved !== null) {
       w.compressionCtx = {
         codec: w.compressionCodec,
@@ -184,6 +192,18 @@ export class BulkStreamWriter {
     return w;
   }
 
+  /**
+   * Report this session's terminal outcome to the endpoint selector exactly once. Only an
+   * endpoint-level transport failure ({@link isEndpointFailure}) ejects the endpoint; a server
+   * business error (table missing, schema mismatch — surfaced with a NOT_FOUND/INVALID_ARGUMENT
+   * gRPC code) leaves it healthy. Caller-initiated `cancel()` does not settle.
+   */
+  private settle(error?: unknown): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.onSettle?.(error);
+  }
+
   private async handshake(): Promise<void> {
     if (this.handshakePromise !== undefined) return this.handshakePromise;
     this.handshakePromise = (async () => {
@@ -195,6 +215,9 @@ export class BulkStreamWriter {
         await this.call.write(schemaFlight);
       } catch (err) {
         this.state = 'errored';
+        // Settle on the raw transport error so the gRPC code drives the health verdict, before
+        // it gets wrapped/rejected onward.
+        this.settle(err);
         this.tracker.rejectAll(err);
         throw err;
       }
@@ -203,6 +226,10 @@ export class BulkStreamWriter {
         this.state = 'ready';
       } catch (err) {
         this.state = 'errored';
+        // Settle on the original rejection (TimeoutError on no-ack, or the raw transport error)
+        // — not the wrapped BulkError below — so a server-side schema rejection does not eject a
+        // healthy endpoint. A no-op if the drain loop already settled.
+        this.settle(err);
         this.logger.log('error', 'bulk schema handshake failed', {
           table: this.schema.tableName,
           error: err instanceof Error ? err.message : String(err),
@@ -341,6 +368,11 @@ export class BulkStreamWriter {
       }
     } catch (err) {
       this.state = 'errored';
+      // A frame-write transport failure is a direct endpoint-health signal. The drain loop
+      // usually also observes the broken stream, but not if the server already ended the
+      // response stream cleanly (drain completes with no settle, then finish() would settle
+      // success). Settle here so a real write failure can never be reported as healthy.
+      this.settle(err);
       // Reject any still-pending sub-ids; the aggregate forwards the rejection.
       for (const id of subIds) this.tracker.reject(id, err);
       throw err;
@@ -447,6 +479,10 @@ export class BulkStreamWriter {
     } finally {
       this.state = 'closed';
     }
+    // Clean drain ⇒ the endpoint handled the whole stream: settle success. A no-op if the drain
+    // loop already settled a transport failure (drainResponses swallows the error rather than
+    // rethrowing, so awaiting drainPromise above can't surface it — the single-fire guard does).
+    this.settle();
     if (this.tracker.hasPending()) {
       const ids = this.tracker.pendingIds();
       const err = new BulkError(
@@ -538,6 +574,10 @@ export class BulkStreamWriter {
       }
     } catch (err) {
       this.state = 'errored';
+      // The drain loop is the authoritative endpoint-health signal: `err` is the raw stream
+      // error carrying the real gRPC code (UNAVAILABLE ejects; NOT_FOUND/INVALID_ARGUMENT does
+      // not). Settle before wrapping into a BulkError.
+      this.settle(err);
       this.logger.log('error', 'bulk drain loop errored', {
         table: this.schema.tableName,
         error: err instanceof Error ? err.message : String(err),

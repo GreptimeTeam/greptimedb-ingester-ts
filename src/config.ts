@@ -1,5 +1,6 @@
 import { ConfigError } from './errors.js';
 import type { Logger } from './internal/logger.js';
+import { RandomSelector, type EndpointSelector } from './transport/endpoint-selector.js';
 import { VERSION } from './version.js';
 
 /**
@@ -72,6 +73,12 @@ export interface ClientConfig {
   readonly userAgent: string;
   readonly logger?: Logger;
   readonly retry: RetryPolicy;
+  /**
+   * Strategy for picking an endpoint per call across `endpoints`. Optional so hand-written
+   * `ClientConfig` literals stay valid; `ConfigBuilder.build()` fills a {@link RandomSelector}
+   * default and `Client` falls back to one if it is still absent.
+   */
+  readonly endpointSelector?: EndpointSelector;
 }
 
 const DEFAULT_MAX_MESSAGE_SIZE = 128 * 1024 * 1024;
@@ -89,6 +96,7 @@ export class ConfigBuilder {
   private _userAgent = `greptime-ingester-ts/${VERSION}`;
   private _logger?: Logger;
   private _retry: RetryPolicy = DEFAULT_RETRY_POLICY;
+  private _endpointSelector?: EndpointSelector;
 
   /** Create a configuration builder with a single endpoint. */
   public static create(endpoint: string): ConfigBuilder {
@@ -156,6 +164,17 @@ export class ConfigBuilder {
     return this;
   }
 
+  /**
+   * Set the endpoint selection strategy (default {@link RandomSelector}). Use
+   * `roundRobinSelector()` for even rotation or `outlierDetectingSelector()` for health-aware
+   * ejection. A stateful selector instance must not be shared across `ConfigBuilder`s with
+   * different endpoint sets.
+   */
+  public withEndpointSelector(selector: EndpointSelector): this {
+    this._endpointSelector = selector;
+    return this;
+  }
+
   public build(): ClientConfig {
     if (this._endpoints.length === 0) {
       throw new ConfigError('at least one endpoint is required');
@@ -181,6 +200,7 @@ export class ConfigBuilder {
       grpcCompression: this._grpcCompression,
       userAgent: this._userAgent,
       retry: this._retry,
+      endpointSelector: this._endpointSelector ?? new RandomSelector(),
       ...(this._auth !== undefined && { auth: this._auth }),
       ...(this._tls !== undefined && { tls: this._tls }),
       ...(this._logger !== undefined && { logger: this._logger }),
