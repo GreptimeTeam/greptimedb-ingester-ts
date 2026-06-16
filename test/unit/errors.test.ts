@@ -34,9 +34,18 @@ describe('isRetriable', () => {
     }
   });
 
-  it('aggressive mode retries transport / timeout errors', () => {
+  it('aggressive mode retries transport errors but not client timeouts', () => {
     expect(isRetriable(new TransportError('x', 13), 'aggressive')).toBe(true);
-    expect(isRetriable(new TimeoutError('x'), 'aggressive')).toBe(true);
+    expect(isRetriable(new TimeoutError('x'), 'aggressive')).toBe(false);
+  });
+
+  // A client-side timeout (DEADLINE_EXCEEDED -> TimeoutError) is the caller's hard latency
+  // budget; each attempt resets the deadline, so retrying would multiply it by maxAttempts
+  // and usually time out again. Non-retriable in every mode.
+  it('never retries client TimeoutError in either mode', () => {
+    for (const mode of ['aggressive', 'conservative'] as const) {
+      expect(isRetriable(new TimeoutError('slow'), mode)).toBe(false);
+    }
   });
 
   it('classifies ServerError by GreptimeDB status code in both modes', () => {
@@ -58,15 +67,16 @@ describe('isRetriable', () => {
   });
 
   it('conservative mode only retries transient gRPC codes', () => {
-    // UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, UNKNOWN
-    for (const code of [14, 4, 8, 10, 2]) {
+    // UNAVAILABLE, RESOURCE_EXHAUSTED, ABORTED, UNKNOWN
+    for (const code of [14, 8, 10, 2]) {
       expect(isRetriable(new TransportError('x', code), 'conservative')).toBe(true);
     }
-    // NOT_FOUND, PERMISSION_DENIED etc. not retried
-    for (const code of [5, 7, 3, 13, 16]) {
+    // DEADLINE_EXCEEDED (4) is excluded — it surfaces as TimeoutError and is never retried.
+    // NOT_FOUND, PERMISSION_DENIED etc. not retried either.
+    for (const code of [4, 5, 7, 3, 13, 16]) {
       expect(isRetriable(new TransportError('x', code), 'conservative')).toBe(false);
     }
-    expect(isRetriable(new TimeoutError('x'), 'conservative')).toBe(true);
+    expect(isRetriable(new TimeoutError('x'), 'conservative')).toBe(false);
   });
 
   it('does not treat foreign errors as retriable', () => {
@@ -100,14 +110,16 @@ describe('isRetryableStatusCode', () => {
 });
 
 describe('isEndpointFailure', () => {
-  it('treats only transport connectivity / capacity errors and timeouts as endpoint failures', () => {
-    // UNAVAILABLE, RESOURCE_EXHAUSTED, DEADLINE_EXCEEDED
-    for (const code of [14, 8, 4]) {
+  it('treats only transport connectivity / capacity errors as endpoint failures', () => {
+    // UNAVAILABLE, RESOURCE_EXHAUSTED
+    for (const code of [14, 8]) {
       expect(isEndpointFailure(new TransportError('down', code))).toBe(true);
     }
-    expect(isEndpointFailure(new TimeoutError('slow'))).toBe(true);
-    // Other transport codes (NOT_FOUND, INVALID_ARGUMENT, UNKNOWN) are request-level.
-    for (const code of [5, 3, 2, 7]) {
+    // A client timeout reflects the caller's clock, not endpoint health — must not eject.
+    expect(isEndpointFailure(new TimeoutError('slow'))).toBe(false);
+    // Request-level / caller-clock codes: NOT_FOUND, INVALID_ARGUMENT, UNKNOWN, PERMISSION_DENIED,
+    // DEADLINE_EXCEEDED. None signal endpoint health.
+    for (const code of [5, 3, 2, 7, 4]) {
       expect(isEndpointFailure(new TransportError('x', code))).toBe(false);
     }
   });
