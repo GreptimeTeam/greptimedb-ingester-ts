@@ -15,6 +15,7 @@ import {
   Precision,
   ServerError,
   Table,
+  TimeoutError,
   TransportError,
   type EndpointSelector,
   type SelectContext,
@@ -146,6 +147,23 @@ describe('Client unary failover', () => {
       await client.close();
     }
 
+    expect(selector.selects).toHaveLength(1);
+    expect(selector.failures).toEqual([]);
+    expect(selector.successes).toEqual([]);
+  });
+
+  it('does not retry or report endpoint health for client-side timeout', async () => {
+    mockedWrite.mockRejectedValueOnce(new TimeoutError('deadline exceeded'));
+
+    const selector = new RecordingSelector();
+    const client = clientWith(selector);
+    try {
+      await expect(client.write(sampleTable())).rejects.toBeInstanceOf(TimeoutError);
+    } finally {
+      await client.close();
+    }
+
+    expect(mockedWrite).toHaveBeenCalledTimes(1);
     expect(selector.selects).toHaveLength(1);
     expect(selector.failures).toEqual([]);
     expect(selector.successes).toEqual([]);
