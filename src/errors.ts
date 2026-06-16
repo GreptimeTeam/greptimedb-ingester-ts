@@ -175,8 +175,9 @@ export function isRetryableStatusCode(code: number): boolean {
  *   that deadline (see `unaryCall`), so retrying would silently multiply the budget by
  *   `maxAttempts` — and usually time out again. A timeout reflects the caller's clock, not
  *   a transient server/network condition.
- * - `aggressive` (default): every other runtime error except local config/schema/value
- *   errors and client timeouts is retriable.
+ * - `aggressive` (default): retries any of the SDK's own errors (`IngesterError` subclasses,
+ *   chiefly `TransportError`) except the local config/schema/value/state errors and client
+ *   timeouts listed above. Foreign throws (plain `Error`, non-`Error` values) are never retried.
  * - `conservative`: retry only transient transport conditions
  *   (UNAVAILABLE / RESOURCE_EXHAUSTED / ABORTED / UNKNOWN).
  */
