@@ -170,34 +170,41 @@ export function isRetryableStatusCode(code: number): boolean {
  * - `ServerError` is authoritative in both modes: only the transient GreptimeDB status
  *   codes ({@link isRetryableStatusCode}) retry; business errors (InvalidArguments,
  *   TableNotFound, auth failures, ...) never do.
+ * - `TimeoutError` (a client-side `DEADLINE_EXCEEDED`) is NOT retriable in either mode:
+ *   `timeoutMs` is the caller's hard latency budget for the write, and each attempt resets
+ *   that deadline (see `unaryCall`), so retrying would silently multiply the budget by
+ *   `maxAttempts` — and usually time out again. A timeout reflects the caller's clock, not
+ *   a transient server/network condition.
  * - `aggressive` (default): every other runtime error except local config/schema/value
- *   errors is retriable.
+ *   errors and client timeouts is retriable.
  * - `conservative`: retry only transient transport conditions
- *   (UNAVAILABLE / DEADLINE_EXCEEDED / RESOURCE_EXHAUSTED / ABORTED / UNKNOWN).
+ *   (UNAVAILABLE / RESOURCE_EXHAUSTED / ABORTED / UNKNOWN).
  */
 export type RetryMode = 'aggressive' | 'conservative';
 
-// gRPC status codes, from @grpc/grpc-js status.ts
+// gRPC status codes, from @grpc/grpc-js status.ts. DEADLINE_EXCEEDED (4) is intentionally
+// absent: promise-adapter maps it to TimeoutError, and a client-side timeout is never retried
+// (see the early return in isRetriable).
 const CONSERVATIVE_RETRIABLE_GRPC_CODES = new Set<number>([
   2, // UNKNOWN
-  4, // DEADLINE_EXCEEDED
   8, // RESOURCE_EXHAUSTED
   10, // ABORTED
   14, // UNAVAILABLE
 ]);
 
 export function isRetriable(err: unknown, mode: RetryMode = 'aggressive'): boolean {
-  // AbortedError is explicitly non-retriable in every mode: the caller has signaled
-  // they want the operation to stop. Without this, aggressive mode's broad
-  // `instanceof IngesterError` branch would classify an abort as retriable — in
-  // practice `withRetry` still stops because AbortSignal is latching, but the
-  // semantics are wrong and confusing in logs.
+  // AbortedError and TimeoutError are explicitly non-retriable in every mode. AbortedError:
+  // the caller signaled stop. TimeoutError: the caller's latency budget (`timeoutMs`) elapsed,
+  // and since each attempt resets the deadline, retrying would blow past that budget and
+  // usually time out again. Without these early returns, aggressive mode's broad
+  // `instanceof IngesterError` branch would wrongly classify both as retriable.
   if (
     err instanceof ConfigError ||
     err instanceof SchemaError ||
     err instanceof ValueError ||
     err instanceof StateError ||
-    err instanceof AbortedError
+    err instanceof AbortedError ||
+    err instanceof TimeoutError
   ) {
     return false;
   }
@@ -213,14 +220,13 @@ export function isRetriable(err: unknown, mode: RetryMode = 'aggressive'): boole
   if (err instanceof TransportError) {
     return CONSERVATIVE_RETRIABLE_GRPC_CODES.has(err.grpcCode);
   }
-  return err instanceof TimeoutError;
+  return false;
 }
 
 // gRPC status codes that indicate the *endpoint* (not the request) is unhealthy: transient
-// connectivity / capacity conditions. DEADLINE_EXCEEDED surfaces as TimeoutError (see
-// promise-adapter), handled separately below.
+// connectivity / capacity conditions. DEADLINE_EXCEEDED is intentionally absent: it surfaces
+// as TimeoutError and reflects the caller's clock, not endpoint health (see below).
 const ENDPOINT_FAILURE_GRPC_CODES = new Set<number>([
-  4, // DEADLINE_EXCEEDED (defensive; normally mapped to TimeoutError before reaching here)
   8, // RESOURCE_EXHAUSTED
   14, // UNAVAILABLE
 ]);
@@ -228,14 +234,14 @@ const ENDPOINT_FAILURE_GRPC_CODES = new Set<number>([
 /**
  * True if `err` indicates the endpoint itself is unhealthy and should be temporarily
  * avoided by a health-aware {@link EndpointSelector}. Only transport-level connectivity /
- * capacity errors and client-side timeouts qualify. A server business error — even a
- * retriable one like `RegionBusy` — means the endpoint is alive and routing correctly, so
- * it must NOT eject the endpoint (that would punish a healthy frontend for a datanode-side
- * condition).
+ * capacity errors qualify. A client-side TimeoutError does NOT: it reflects the caller's
+ * own deadline (`timeoutMs`), not the endpoint's health, so a tight caller deadline must
+ * never eject an otherwise-healthy endpoint. A server business error — even a retriable one
+ * like `RegionBusy` — likewise means the endpoint is alive and routing correctly.
  */
 export function isEndpointFailure(err: unknown): boolean {
   if (err instanceof TransportError) {
     return ENDPOINT_FAILURE_GRPC_CODES.has(err.grpcCode);
   }
-  return err instanceof TimeoutError;
+  return false;
 }
