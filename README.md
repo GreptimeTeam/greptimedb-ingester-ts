@@ -116,6 +116,7 @@ await client.write(table, { hints: { append_mode: 'true' } });
 - Strings are parsed as JSON text; other values are serialized with `JSON.stringify` first.
 - The top-level value must be an object or null. `null`, `undefined`, and the JSON text `null` write SQL NULL.
 - Numbers keep their JSON literal type: integers without `.` or an exponent are sent as exact int64/uint64 (including values beyond 2^53), everything else as float64.
+- Strings and keys with unpaired UTF-16 surrogates throw `ValueError`, because UTF-8 encoding cannot represent them.
 
 ## Configuration
 

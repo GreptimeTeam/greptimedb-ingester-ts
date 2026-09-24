@@ -20,6 +20,9 @@ function jsonValue(value: JsonValue['value']): JsonValue {
 
 const NUMBER_RE = /-?(?:0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/y;
 
+// No `u` flag: match individual UTF-16 code units.
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /**
  * Parse a JSON2 payload. Returns `undefined` for JSON `null` (SQL NULL); throws
  * `ValueError` for invalid JSON or a top-level value that is not an object.
@@ -135,6 +138,7 @@ class Parser {
     const s = this.text;
     const start = this.pos;
     let escaped = false;
+    let surrogate = false;
     let i = start + 1;
     for (;;) {
       if (i >= s.length) {
@@ -152,17 +156,29 @@ class Parser {
         this.pos = i;
         this.fail('unescaped control character in string');
       }
+      if (c >= 0xd800 && c <= 0xdfff) surrogate = true;
       i++;
     }
-    this.pos = i + 1;
-    if (!escaped) return s.slice(start + 1, i);
-    // Escape decoding and validation are delegated to the native parser.
-    try {
-      return JSON.parse(s.slice(start, i + 1)) as string;
-    } catch {
-      this.pos = start;
-      return this.fail('invalid escape sequence in string');
+    let value: string;
+    if (!escaped) {
+      value = s.slice(start + 1, i);
+    } else {
+      // Escape decoding and validation are delegated to the native parser.
+      try {
+        value = JSON.parse(s.slice(start, i + 1)) as string;
+      } catch {
+        this.pos = start;
+        return this.fail('invalid escape sequence in string');
+      }
     }
+    // Protobuf strings are UTF-8, and the encoder replaces a lone surrogate with U+FFFD.
+    // That would silently change values and could merge distinct object keys.
+    if ((surrogate || escaped) && LONE_SURROGATE_RE.test(value)) {
+      this.pos = start;
+      this.fail('unpaired UTF-16 surrogate in string');
+    }
+    this.pos = i + 1;
+    return value;
   }
 
   private parseNumber(): JsonValue {

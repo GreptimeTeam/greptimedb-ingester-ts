@@ -1,8 +1,8 @@
-import { toJson } from '@bufbuild/protobuf';
+import { fromBinary, toBinary, toJson } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 import { DataType, Precision, SchemaError, Table, ValueError } from '../../src/index.js';
 import { rowsToArrowTable } from '../../src/bulk/arrow-encoder.js';
-import { JsonValueSchema } from '../../src/generated/greptime/v1/row_pb.js';
+import { JsonValueSchema, ValueSchema } from '../../src/generated/greptime/v1/row_pb.js';
 import { ColumnDataType } from '../../src/generated/greptime/v1/common_pb.js';
 import { toProtoValue } from '../../src/table/value.js';
 import { encodeTable } from '../../src/write/encode.js';
@@ -99,6 +99,42 @@ describe('Json2 values', () => {
       '{"a":tru}',
     ]) {
       expect(() => encodeJson2(v), v).toThrow(ValueError);
+    }
+  });
+
+  it('rejects unpaired surrogates that UTF-8 encoding would replace with U+FFFD', () => {
+    for (const v of [
+      '{"v":"\\ud800"}',
+      '{"v":"a\\udc00b"}',
+      '{"v":"\\udc00\\ud800"}',
+      '{"\\ud800":1,"\\ufffd":2}',
+      '{"v":"\ud800"}',
+      { v: '\ud800' },
+    ]) {
+      expect(() => encodeJson2(v), JSON.stringify(v)).toThrow(ValueError);
+    }
+  });
+
+  it('keeps valid surrogate pairs through a binary round trip', () => {
+    for (const text of ['{"😀":"\\ud83d\\ude00"}', '{"\\ud83d\\ude00":"😀"}']) {
+      const value = toProtoValue(text, DataType.Json2);
+      const decoded = fromBinary(ValueSchema, toBinary(ValueSchema, value));
+      expect(decoded.valueData).toEqual({
+        case: 'jsonValue',
+        value: expect.objectContaining({
+          value: {
+            case: 'object',
+            value: expect.objectContaining({
+              entries: [
+                expect.objectContaining({
+                  key: '😀',
+                  value: expect.objectContaining({ value: { case: 'str', value: '😀' } }),
+                }),
+              ],
+            }),
+          },
+        }),
+      });
     }
   });
 
