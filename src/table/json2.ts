@@ -5,20 +5,18 @@
 // is float, `18446744073709551615` stays exact). `JSON.parse` loses both the lexeme and
 // integer precision beyond 2^53. The classification matches the Java and Rust ingesters.
 
-import { create } from '@bufbuild/protobuf';
-import {
-  JsonListSchema,
-  JsonObjectSchema,
-  JsonObject_EntrySchema,
-  JsonValueSchema,
-  type JsonObject_Entry,
-  type JsonValue,
-} from '../generated/greptime/v1/row_pb.js';
+import type { JsonObject_Entry, JsonValue } from '../generated/greptime/v1/row_pb.js';
 import { ValueError } from '../errors.js';
 import { I64_MIN, U64_MAX } from './validators.js';
 
 // Same default as serde_json, which the Rust ingester uses.
 const MAX_DEPTH = 128;
+
+// Messages are built as plain objects instead of via `create()`: protobuf-es v2 messages are
+// plain objects, every field here is set explicitly, and `create()` was ~70% of parse time.
+function jsonValue(value: JsonValue['value']): JsonValue {
+  return { $typeName: 'greptime.v1.JsonValue', value };
+}
 
 const NUMBER_RE = /-?(?:0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/y;
 
@@ -65,16 +63,16 @@ class Parser {
       case '[':
         return this.parseArray(depth + 1);
       case '"':
-        return create(JsonValueSchema, { value: { case: 'str', value: this.parseString() } });
+        return jsonValue({ case: 'str', value: this.parseString() });
       case 't':
         this.expectLiteral('true');
-        return create(JsonValueSchema, { value: { case: 'boolean', value: true } });
+        return jsonValue({ case: 'boolean', value: true });
       case 'f':
         this.expectLiteral('false');
-        return create(JsonValueSchema, { value: { case: 'boolean', value: false } });
+        return jsonValue({ case: 'boolean', value: false });
       case 'n':
         this.expectLiteral('null');
-        return create(JsonValueSchema);
+        return jsonValue({ case: undefined });
       default:
         if (c === '-' || (c !== undefined && c >= '0' && c <= '9')) return this.parseNumber();
         return this.fail(c === undefined ? 'unexpected end of input' : `unexpected '${c}'`);
@@ -96,7 +94,7 @@ class Parser {
         this.expectChar(':');
         this.skipWhitespace();
         const value = this.parseValue(depth);
-        entries.push(create(JsonObject_EntrySchema, { key, value }));
+        entries.push({ $typeName: 'greptime.v1.JsonObject.Entry', key, value });
         this.skipWhitespace();
         if (this.text[this.pos] === ',') {
           this.pos++;
@@ -107,9 +105,7 @@ class Parser {
         break;
       }
     }
-    return create(JsonValueSchema, {
-      value: { case: 'object', value: create(JsonObjectSchema, { entries }) },
-    });
+    return jsonValue({ case: 'object', value: { $typeName: 'greptime.v1.JsonObject', entries } });
   }
 
   private parseArray(depth: number): JsonValue {
@@ -132,9 +128,7 @@ class Parser {
         break;
       }
     }
-    return create(JsonValueSchema, {
-      value: { case: 'array', value: create(JsonListSchema, { items }) },
-    });
+    return jsonValue({ case: 'array', value: { $typeName: 'greptime.v1.JsonList', items } });
   }
 
   private parseString(): string {
@@ -180,10 +174,10 @@ class Parser {
     if (m[1] === undefined && m[2] === undefined) {
       const n = BigInt(lexeme);
       if (n >= 0n && n <= U64_MAX) {
-        return create(JsonValueSchema, { value: { case: 'uint', value: n } });
+        return jsonValue({ case: 'uint', value: n });
       }
       if (n < 0n && n >= I64_MIN) {
-        return create(JsonValueSchema, { value: { case: 'int', value: n } });
+        return jsonValue({ case: 'int', value: n });
       }
     }
     const f = Number(lexeme);
@@ -191,7 +185,7 @@ class Parser {
       this.pos -= lexeme.length;
       this.fail(`number ${lexeme} is out of float64 range`);
     }
-    return create(JsonValueSchema, { value: { case: 'float', value: f } });
+    return jsonValue({ case: 'float', value: f });
   }
 
   private expectLiteral(literal: string): void {
