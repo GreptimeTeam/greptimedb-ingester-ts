@@ -7,6 +7,7 @@ import { ValueSchema, type Value } from '../generated/greptime/v1/row_pb.js';
 import { Decimal128Schema } from '../generated/greptime/v1/common_pb.js';
 import { ValueError } from '../errors.js';
 import { DataType } from './data-type.js';
+import { parseJson2 } from './json2.js';
 import type { DecimalSpec } from './schema.js';
 import {
   I64_MAX,
@@ -191,6 +192,11 @@ export function toProtoValue(ts: unknown, dataType: DataType, decimal?: DecimalS
       return create(ValueSchema, {
         valueData: { case: 'stringValue', value: safeStringifyJson(ts) },
       });
+    }
+    case DataType.Json2: {
+      const json = parseJson2(safeStringifyJson(ts, 'Json2'));
+      if (json === undefined) return EMPTY_VALUE;
+      return create(ValueSchema, { valueData: { case: 'jsonValue', value: json } });
     }
     case DataType.Decimal128: {
       if (!decimal) {
