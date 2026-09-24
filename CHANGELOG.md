@@ -2,9 +2,22 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-24
+
 ### Added
 
 - `DataType.Json2` write support on the unary/streaming paths (GreptimeDB 1.2.1+). The column schema carries the JSON2 type extension, so auto-create builds a `JSON2` column. Values are JSON text or JSON-serializable values with an object (or null) at the top level; integers are sent as exact int64/uint64, matching the Java and Rust ingesters. FIELD columns only; unsupported on the bulk Arrow path (throws `ValueError`).
+
+## [0.2.1] — 2026-06-16
+
+### Fixed
+
+- A client-side timeout (`TimeoutError`, gRPC `DEADLINE_EXCEEDED`) is no longer retried and no longer counts as an endpoint failure. `timeoutMs` is the caller's latency budget and each attempt reset the deadline, so retries multiplied it by `maxAttempts`; a tight deadline could also eject a healthy endpoint.
+
+## [0.2.0] — 2026-06-12
+
+### Added
+
 - `DataType.Decimal128` write support on the unary/streaming paths: `Table.addDecimalFieldColumn(name, precision, scale)` ships a proto `DecimalTypeExtension` so auto-create produces a `DECIMAL(precision, scale)` column. Values accept decimal strings (exact), numbers, or bigints; excess fractional digits round half-up. Unsupported on the bulk Arrow path (throws `ValueError`).
 - Pluggable `EndpointSelector` for multi-endpoint failover: `RandomSelector` (default), `RoundRobinSelector`, and `OutlierDetectingSelector` (Envoy-style consecutive-failure ejection with exponential back-off). Configure via `ConfigBuilder.withEndpointSelector()`; factory helpers `randomSelector()` / `roundRobinSelector()` / `outlierDetectingSelector()`.
 - Retry-time exclusion of already-failed peers: within a single `write()` retry sequence, a peer that just failed is excluded so one dead endpoint cannot burn the whole retry budget.
