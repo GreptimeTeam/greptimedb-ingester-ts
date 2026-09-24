@@ -103,7 +103,7 @@
     "@opentelemetry/resources": "^2.7.0",
     "@opentelemetry/sdk-logs": "^0.215.0",
     "@types/node": "^22.9.0",
-    "@vitest/coverage-v8": "^2.1.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "eslint": "^9.14.0",
     "globals": "^15.12.0",
     "hdr-histogram-js": "^3.0.0",
@@ -115,6 +115,6 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.13.0",
-    "vitest": "^2.1.0"
+    "vitest": "^3.2.7"
   }
 }
