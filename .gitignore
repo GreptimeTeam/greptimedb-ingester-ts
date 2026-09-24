@@ -53,3 +53,6 @@ bench-results/
 # local scratch
 .scratch/
 TODO.local.md
+
+# local GreptimeDB data dir
+greptimedb_data/

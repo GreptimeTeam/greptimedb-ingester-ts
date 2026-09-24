@@ -126,6 +126,10 @@ function arrowTypeFor(dt: DataType): ArrowDataType {
       throw new ValueError(
         'Decimal128 is not supported on the bulk Arrow path; use the unary or streaming write',
       );
+    case DataType.Json2:
+      throw new ValueError(
+        'Json2 is not supported on the bulk Arrow path; use the unary or streaming write',
+      );
   }
 }
 
@@ -219,6 +223,10 @@ function normalizeValue(v: unknown, dt: DataType): unknown {
     case DataType.Decimal128:
       throw new ValueError(
         'Decimal128 is not supported on the bulk Arrow path; use the unary or streaming write',
+      );
+    case DataType.Json2:
+      throw new ValueError(
+        'Json2 is not supported on the bulk Arrow path; use the unary or streaming write',
       );
   }
 }

@@ -1,6 +1,6 @@
 // Encode Tables into proto `RowInsertRequests`. Shared by the unary and streaming paths.
 
-import { create } from '@bufbuild/protobuf';
+import { create, type MessageInitShape } from '@bufbuild/protobuf';
 import {
   ColumnSchemaSchema,
   RowSchema,
@@ -16,13 +16,55 @@ import {
   type RowInsertRequests,
 } from '../generated/greptime/v1/database_pb.js';
 import {
+  ColumnDataType,
   ColumnDataTypeExtensionSchema,
+  ColumnOptionsSchema,
   DecimalTypeExtensionSchema,
+  JsonNativeTypeExtensionSchema,
 } from '../generated/greptime/v1/common_pb.js';
 import { SchemaError } from '../errors.js';
 import { DataType, toProtoDataType, toProtoSemanticType } from '../table/data-type.js';
 import { toProtoValue } from '../table/value.js';
+import type { ColumnSpec } from '../table/schema.js';
 import type { Table } from '../table/table.js';
+
+// Same column metadata as a SQL-declared JSON2 column, so auto-create builds a JSON2 column
+// (matches the Java and Rust ingesters).
+const JSON2_COLUMN_OPTIONS = {
+  'ARROW:extension:name': 'greptime.json2',
+  'ARROW:extension:metadata':
+    '{"json_settings":{"type_hints":[],"max_auto_expanded_paths":100},"layout_version":2}',
+};
+
+function columnTypeExtras(
+  spec: ColumnSpec,
+): Pick<MessageInitShape<typeof ColumnSchemaSchema>, 'datatypeExtension' | 'options'> {
+  if (spec.dataType === DataType.Decimal128 && spec.decimal) {
+    return {
+      datatypeExtension: create(ColumnDataTypeExtensionSchema, {
+        typeExt: {
+          case: 'decimalType',
+          value: create(DecimalTypeExtensionSchema, {
+            precision: spec.decimal.precision,
+            scale: spec.decimal.scale,
+          }),
+        },
+      }),
+    };
+  }
+  if (spec.dataType === DataType.Json2) {
+    return {
+      datatypeExtension: create(ColumnDataTypeExtensionSchema, {
+        typeExt: {
+          case: 'jsonNativeType',
+          value: create(JsonNativeTypeExtensionSchema, { datatype: ColumnDataType.JSON }),
+        },
+      }),
+      options: create(ColumnOptionsSchema, { options: JSON2_COLUMN_OPTIONS }),
+    };
+  }
+  return {};
+}
 
 export function encodeTable(table: Table): RowInsertRequest {
   const cols = table.columns();
@@ -31,19 +73,7 @@ export function encodeTable(table: Table): RowInsertRequest {
       columnName: spec.name,
       datatype: toProtoDataType(spec.dataType),
       semanticType: toProtoSemanticType(spec.semantic),
-      ...(spec.dataType === DataType.Decimal128 && spec.decimal
-        ? {
-            datatypeExtension: create(ColumnDataTypeExtensionSchema, {
-              typeExt: {
-                case: 'decimalType',
-                value: create(DecimalTypeExtensionSchema, {
-                  precision: spec.decimal.precision,
-                  scale: spec.decimal.scale,
-                }),
-              },
-            }),
-          }
-        : {}),
+      ...columnTypeExtras(spec),
     }),
   );
   const rows: Row[] = table.rows().map((rowValues) => {

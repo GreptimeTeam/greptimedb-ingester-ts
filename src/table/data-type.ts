@@ -35,6 +35,12 @@ export const DataType = {
   TimeNanosecond: 'TimeNanosecond',
   Json: 'Json',
   /**
+   * JSON2 column (GreptimeDB 1.2.1+). FIELD columns only; unary/streaming write paths
+   * only. Values are JSON text or JSON-serializable values whose top level is an object;
+   * `null` and the JSON text `"null"` both encode as SQL NULL.
+   */
+  Json2: 'Json2',
+  /**
    * Fixed-point decimal backed by a 128-bit integer. A column of this type carries
    * `precision`/`scale` metadata (see `ColumnSpec.decimal`) that the encoder ships as a
    * proto `DecimalTypeExtension`. Only supported on the unary/streaming write paths.
@@ -140,6 +146,7 @@ export function toProtoDataType(t: DataType): ColumnDataType {
     case DataType.TimeNanosecond:
       return ColumnDataType.TIME_NANOSECOND;
     case DataType.Json:
+    case DataType.Json2:
       return ColumnDataType.JSON;
     case DataType.Decimal128:
       return ColumnDataType.DECIMAL128;

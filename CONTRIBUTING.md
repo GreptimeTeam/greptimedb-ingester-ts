@@ -36,7 +36,7 @@ pnpm example 01-simple-insert   # smoke-test against it
 INTEGRATION=1 pnpm test:integration
 ```
 
-Uses `testcontainers` to pull `greptime/greptimedb:v1.0.0`. Don't bump that tag casually — version bumps should be intentional and reviewed in their own PR so server-behavior drift doesn't hide inside an unrelated change.
+Uses `testcontainers` to pull `greptime/greptimedb:v1.2.1`. Don't bump that tag casually — version bumps should be intentional and reviewed in their own PR so server-behavior drift doesn't hide inside an unrelated change.
 
 ## Benchmarks
 

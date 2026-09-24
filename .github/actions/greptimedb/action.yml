@@ -11,7 +11,7 @@ inputs:
   version:
     description: GreptimeDB image tag (override in PR to test against latest).
     required: false
-    default: v1.0.0
+    default: v1.2.1
 
 runs:
   using: composite

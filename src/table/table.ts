@@ -83,6 +83,9 @@ export class Table {
         `timestamp column "${spec.name}" requires a Timestamp* dataType, got ${spec.dataType}`,
       );
     }
+    if (spec.dataType === DataType.Json2 && spec.semantic !== 'field') {
+      throw new SchemaError(`Json2 column "${spec.name}" must be a FIELD column`);
+    }
     if (spec.dataType === DataType.Decimal128 && spec.decimal === undefined) {
       throw new SchemaError(
         `Decimal128 column "${spec.name}" requires precision/scale; use addDecimalFieldColumn()`,

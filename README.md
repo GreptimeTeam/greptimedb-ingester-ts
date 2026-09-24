@@ -97,6 +97,27 @@ await client.writeObject([
 ]);
 ```
 
+## JSON2 columns
+
+`DataType.Json2` writes GreptimeDB JSON2 columns (server 1.2.1+). It is supported on FIELD columns with unary and streaming writes; the bulk path throws `ValueError`.
+
+```ts
+const table = Table.new('json2_logs')
+  .addFieldColumn('payload', DataType.Json2)
+  .addTimestampColumn('ts', Precision.Millisecond)
+  .addRow(['{"message":"hello","nested":{"items":[1,"two",null]}}', Date.now()])
+  .addRow([{ message: 'from an object' }, Date.now() + 1])
+  .addRow([null, Date.now() + 2]);
+
+// JSON2 tables must be created with append_mode=true.
+await client.write(table, { hints: { append_mode: 'true' } });
+```
+
+- Strings are parsed as JSON text; other values are serialized with `JSON.stringify` first.
+- The top-level value must be an object or null. `null`, `undefined`, and the JSON text `null` write SQL NULL.
+- Numbers keep their JSON literal type: integers without `.` or an exponent are sent as exact int64/uint64 (including values beyond 2^53), everything else as float64.
+- Strings and keys with unpaired UTF-16 surrogates throw `ValueError`, because UTF-8 encoding cannot represent them.
+
 ## Configuration
 
 ```ts
@@ -147,7 +168,7 @@ On the 22-column log schema the bulk path reaches **~137k rows/s** (2M rows, bat
 
 ## Compatibility
 
-- CI-tested: Node.js 20.x and 22.x, full suite; integration tests against `greptime/greptimedb:v1.0.0`.
+- CI-tested: Node.js 20.x and 22.x, full suite; integration tests against `greptime/greptimedb:v1.2.1`.
 - Node.js 20.x is the supported minimum.
 - Bun (latest) and Deno (2.x): CI-gated via a smoke-level integration test against a live GreptimeDB. Full unit suite runs on Node only.
 
@@ -177,7 +198,6 @@ const client = new Client(
 ## Roadmap
 
 - Off-main-thread Arrow encoding (worker_threads pool) to close the TS↔Go throughput gap on wide-schema bulk — today `rowsToArrowTable` is ~99% of client CPU (see [docs/benchmarking.md](./docs/benchmarking.md))
-- JSON v2 column type (binary JSON encoding)
 - OpenTelemetry instrumentation of the SDK itself (write latency, retries, bulk/stream state as metrics + spans)
 - Browser build via gRPC-Web in a separate `@greptime/ingester-web` package (unary + streaming only; no bulk)
 
