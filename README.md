@@ -92,6 +92,8 @@ Constructor options:
 
 The browser entry has no Node.js runtime dependencies or polyfill requirements. It uses one endpoint per client. TLS is controlled by the URL and browser trust store. Client streaming, Arrow Flight bulk writes, gRPC compression, and Node.js channel options are not supported.
 
+Runnable example: [examples/09-browser](./examples/09-browser/). Start it with `pnpm example:browser`.
+
 ## Three write modes
 
 | Mode      | API                                     | When                                                     |
