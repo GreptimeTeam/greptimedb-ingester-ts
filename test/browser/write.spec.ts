@@ -152,3 +152,46 @@ test('surfaces authentication failures in the browser', async ({ page }) => {
   expect(error?.kind).toBe('transport');
   expect(error?.message).toMatch(/password|auth/i);
 });
+
+test('honors auto_create_table=false without creating the missing table', async ({ page }) => {
+  await page.goto(origin);
+  const tableName = `web_no_autocreate_${Date.now()}`;
+  const error = await page.evaluate(
+    async ({ endpoint, tableName }) => {
+      const { Client, Table, Precision, TransportError } = window.ingester;
+      const client = new Client({
+        endpoint,
+        auth: { kind: 'basic', username: 'web', password: 'test' },
+        retry: { maxAttempts: 1 },
+      });
+      try {
+        await client.write(
+          Table.new(tableName).addTimestampColumn('ts', Precision.Millisecond).addRow([123]),
+          { hints: { auto_create_table: 'false' } },
+        );
+        return null;
+      } catch (err) {
+        if (!(err instanceof TransportError)) throw err;
+        return { code: err.grpcCode, message: err.message };
+      } finally {
+        await client.close();
+      }
+    },
+    { endpoint, tableName },
+  );
+  expect(error?.code).toBe(3);
+  expect(error?.message).toContain('`auto_create_table` hint is disabled');
+
+  const res = await fetch(`${httpEndpoint}/v1/sql?db=public`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      authorization: `Basic ${Buffer.from('web:test').toString('base64')}`,
+    },
+    body: new URLSearchParams({
+      sql: `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '${tableName}'`,
+    }),
+  });
+  const json = (await res.json()) as { output: { records: { rows: unknown[][] } }[] };
+  expect(json.output[0]?.records.rows).toEqual([]);
+});
