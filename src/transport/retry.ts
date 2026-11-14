@@ -1,4 +1,4 @@
-import type { RetryPolicy } from '../config.js';
+import type { RetryPolicy } from '../config-shared.js';
 import { AbortedError, isRetriable } from '../errors.js';
 import { NOOP_LOGGER, type Logger } from '../internal/logger.js';
 
@@ -6,7 +6,7 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     // Use a const holder so eslint `prefer-const` is satisfied while the timer can
     // still be both observed by the abort listener and cleared from cleanup.
-    const state: { timer?: NodeJS.Timeout } = {};
+    const state: { timer?: ReturnType<typeof setTimeout> } = {};
     const cleanup = (): void => {
       signal?.removeEventListener('abort', onAbort);
       if (state.timer !== undefined) clearTimeout(state.timer);

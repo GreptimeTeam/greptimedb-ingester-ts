@@ -1,42 +1,7 @@
-// Two auth/context paths — unary/streaming go via proto RequestHeader; bulk via gRPC metadata.
-// Bulk cannot carry RequestHeader, so auth/dbname must travel in transport metadata instead.
-
-import { create } from '@bufbuild/protobuf';
 import { Metadata } from '@grpc/grpc-js';
-
-import {
-  AuthHeaderSchema,
-  BasicSchema,
-  RequestHeaderSchema,
-  type AuthHeader,
-  type RequestHeader,
-} from './generated/greptime/v1/common_pb.js';
 import type { AuthConfig, ClientConfig } from './config.js';
-import { ValueError } from './errors.js';
-
-function buildAuthHeader(auth: AuthConfig): AuthHeader {
-  // Only `basic` is supported; see AuthConfig docs.
-  const basic = create(BasicSchema, { username: auth.username, password: auth.password });
-  return create(AuthHeaderSchema, {
-    authScheme: { case: 'basic', value: basic },
-  });
-}
-
-/** Build a proto `RequestHeader` for unary / streaming (HandleRequests) calls. */
-export function buildRequestHeader(
-  cfg: ClientConfig,
-  extras?: { tracingContext?: Record<string, string>; timezone?: string },
-): RequestHeader {
-  const header = create(RequestHeaderSchema, {
-    dbname: cfg.database,
-    ...(extras?.timezone !== undefined && { timezone: extras.timezone }),
-    ...(extras?.tracingContext !== undefined && { tracingContext: extras.tracingContext }),
-  });
-  if (cfg.auth !== undefined) {
-    header.authorization = buildAuthHeader(cfg.auth);
-  }
-  return header;
-}
+import { encodeHints } from './write/request.js';
+export { buildRequestHeader } from './write/request.js';
 
 /**
  * Build gRPC `Metadata` for the Arrow Flight DoPut bulk path.
@@ -72,23 +37,8 @@ function encodeAuthMetadata(auth: AuthConfig): string {
  * cost is invisible next to the surrounding gRPC call.
  */
 export function buildHintsMetadata(hints?: Record<string, string>): Metadata {
-  if (hints === undefined) return new Metadata();
-  const entries = Object.entries(hints);
-  if (entries.length === 0) return new Metadata();
-  const parts: string[] = [];
-  for (const [k, v] of entries) {
-    if (k.length === 0) {
-      throw new ValueError('hint key must not be empty');
-    }
-    if (k.includes(',') || k.includes('=')) {
-      throw new ValueError(`hint key "${k}" contains illegal character ',' or '='`);
-    }
-    if (v.includes(',') || v.includes('=')) {
-      throw new ValueError(`hint value for "${k}" contains illegal character ',' or '='`);
-    }
-    parts.push(`${k}=${v}`);
-  }
   const md = new Metadata();
-  md.set('x-greptime-hints', parts.join(','));
+  const encoded = encodeHints(hints);
+  if (encoded !== undefined) md.set('x-greptime-hints', encoded);
   return md;
 }

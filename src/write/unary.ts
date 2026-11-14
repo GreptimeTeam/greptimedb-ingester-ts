@@ -2,15 +2,12 @@
 // and unpacks the AffectedRows response.
 
 import { create } from '@bufbuild/protobuf';
-import { status } from '@grpc/grpc-js';
 
 import { buildHintsMetadata, buildRequestHeader } from '../auth.js';
 import type { ClientConfig } from '../config.js';
-import { ServerError, TransportError } from '../errors.js';
 import {
   GreptimeRequestSchema,
   type GreptimeRequest,
-  type GreptimeResponse,
 } from '../generated/greptime/v1/database_pb.js';
 import { HandleMethod } from '../transport/grpc-services.js';
 import type { Channel } from '../transport/channel.js';
@@ -18,24 +15,10 @@ import { unaryCall } from '../transport/promise-adapter.js';
 import type { Table } from '../table/table.js';
 import { encodeTables } from './encode.js';
 import type { AffectedRows } from './affected-rows.js';
+import { extractAffected } from './response.js';
+import type { WriteOptions } from './request.js';
 
-export interface WriteOptions {
-  readonly signal?: AbortSignal;
-  readonly timeoutMs?: number;
-  readonly hints?: Record<string, string>;
-}
-
-function extractAffected(res: GreptimeResponse): AffectedRows {
-  const statusCode = res.header?.status?.statusCode ?? 0;
-  if (statusCode !== 0) {
-    const msg = res.header?.status?.errMsg ?? `server returned status ${statusCode}`;
-    throw new ServerError(msg, statusCode);
-  }
-  if (res.response.case !== 'affectedRows') {
-    throw new TransportError('Handle returned empty response', status.UNKNOWN);
-  }
-  return { value: res.response.value.value };
-}
+export type { WriteOptions } from './request.js';
 
 export async function performUnaryWrite(
   channel: Channel,

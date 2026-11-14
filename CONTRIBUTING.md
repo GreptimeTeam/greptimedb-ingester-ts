@@ -38,6 +38,15 @@ INTEGRATION=1 pnpm test:integration
 
 Uses `testcontainers` to pull `greptime/greptimedb:v1.2.1`. Don't bump that tag casually — version bumps should be intentional and reviewed in their own PR so server-behavior drift doesn't hide inside an unrelated change.
 
+## Browser integration tests
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:browser
+```
+
+Requires Docker and a current Node.js 22 patch release. The tests start an isolated GreptimeDB container with authentication and CORS, allocate host ports dynamically, and stop the container after the tests. The server image is pinned to `v1.4.0-nightly-20261109` because `v1.3.1` does not include gRPC CORS configuration. The browser bundle and declarations are checked without Node.js polyfills or Node.js type definitions.
+
 ## Benchmarks
 
 ```bash

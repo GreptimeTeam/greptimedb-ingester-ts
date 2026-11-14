@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Browser client at `@greptime/ingester/web` for unary gRPC-Web writes against gRPC-Web-enabled GreptimeDB servers. Supports Table and decorator-based writes, basic auth, hints, retries, timeouts, and cancellation. Client streaming and bulk writes remain Node.js-only.
+
 ## [0.3.0] — 2026-09-24
 
 ### Added

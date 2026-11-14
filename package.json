@@ -39,7 +39,8 @@
   "tshy": {
     "exports": {
       ".": "./src/index.ts",
-      "./package.json": "./package.json"
+      "./package.json": "./package.json",
+      "./web": "./src/web/index.ts"
     },
     "dialects": [
       "esm",
@@ -57,7 +58,17 @@
         "default": "./dist/commonjs/index.js"
       }
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./web": {
+      "import": {
+        "types": "./dist/esm/web/index.d.ts",
+        "default": "./dist/esm/web/index.js"
+      },
+      "require": {
+        "types": "./dist/commonjs/web/index.d.ts",
+        "default": "./dist/commonjs/web/index.js"
+      }
+    }
   },
   "main": "./dist/commonjs/index.js",
   "types": "./dist/commonjs/index.d.ts",
@@ -79,10 +90,14 @@
     "test:all": "INTEGRATION=1 vitest run",
     "bench": "tsx bench/index.ts",
     "example": "tsx scripts/run-example.ts",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "test:browser": "pnpm build && tsc -p test/browser/tsconfig.json && playwright test",
+    "example:browser": "pnpm build && esbuild examples/09-browser/main.ts --bundle --format=esm --platform=browser --outfile=examples/09-browser/dist/main.js --servedir=examples/09-browser --serve=127.0.0.1:5173"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.2.0",
+    "@bufbuild/protobuf": "^2.11.0",
+    "@connectrpc/connect": "^2.3.0",
+    "@connectrpc/connect-web": "^2.3.0",
     "@grpc/grpc-js": "^1.12.0",
     "apache-arrow": "^18.0.0",
     "flatbuffers": "^24.12.23"
@@ -102,8 +117,10 @@
     "@opentelemetry/exporter-logs-otlp-proto": "^0.215.0",
     "@opentelemetry/resources": "^2.7.0",
     "@opentelemetry/sdk-logs": "^0.215.0",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^22.9.0",
     "@vitest/coverage-v8": "^3.2.7",
+    "esbuild": "^0.28.2",
     "eslint": "^9.14.0",
     "globals": "^15.12.0",
     "hdr-histogram-js": "^3.0.0",

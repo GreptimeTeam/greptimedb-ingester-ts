@@ -10,6 +10,7 @@ Official TypeScript ingester SDK for [GreptimeDB](https://github.com/GreptimeTea
 ## Features
 
 - Three write modes on one `Client`: unary, streaming, and Arrow Flight bulk with LZ4 / ZSTD body compression
+- Browser unary writes over gRPC-Web through `@greptime/ingester/web`
 - Stage-3 decorators (TS 5) for object mapping — no `reflect-metadata`
 - TLS (system / PEM / file), basic auth, gzip transport compression
 - Multi-endpoint failover: pluggable `EndpointSelector` (random / round-robin / health-aware outlier detection) with retry-time exclusion of failed peers
@@ -41,6 +42,57 @@ const result = await client.write(table);
 console.log(`inserted ${result.value} rows`);
 await client.close();
 ```
+
+## Browser writes
+
+Import the browser client from `@greptime/ingester/web`. Requires a gRPC-Web-enabled GreptimeDB server and a browser with Fetch and `AbortSignal.any` support.
+
+For direct cross-origin access, the server must also include [gRPC CORS support](https://github.com/GreptimeTeam/greptimedb/pull/9374), available in `v1.4.0-nightly-20261109`. The `v1.3.1` release supports gRPC-Web but does not include these CORS settings; use a reverse proxy that serves the application and gRPC-Web endpoint under the same origin, or handles CORS.
+
+On a server with gRPC CORS support, allow the application's origin:
+
+```toml
+[grpc]
+enable_cors = true
+cors_allowed_origins = ["http://localhost:5173"]
+```
+
+Use the gRPC port with an HTTP(S) URL:
+
+```ts
+import { Client, DataType, Precision, Table } from '@greptime/ingester/web';
+
+const client = new Client({
+  endpoint: 'http://localhost:4001',
+  database: 'public',
+  timeoutMs: 10_000,
+});
+
+const table = Table.new('browser_metrics')
+  .addFieldColumn('value', DataType.Float64)
+  .addTimestampColumn('ts', Precision.Millisecond)
+  .addRow([42, Date.now()]);
+
+await client.write(table);
+await client.close();
+```
+
+The browser client supports `write`, `writeObject`, Table builders, decorators, and all unary column types. `write` accepts `signal`, `timeoutMs`, and `hints` options. `close()` aborts active writes and retry waits; subsequent writes throw `StateError`.
+
+Constructor options:
+
+| Option      | Default                | Description                                                                   |
+| ----------- | ---------------------- | ----------------------------------------------------------------------------- |
+| `endpoint`  | Required               | Absolute HTTP(S) URL of the gRPC listener; optional reverse-proxy path prefix |
+| `database`  | `public`               | Target database                                                               |
+| `auth`      | Unset                  | `{ kind: 'basic', username, password }`, sent in the protobuf request header  |
+| `timeoutMs` | `60000`                | Per-attempt timeout in milliseconds; timeouts are not retried                 |
+| `retry`     | `DEFAULT_RETRY_POLICY` | Partial retry policy, with the same defaults as the Node.js client            |
+| `logger`    | Unset                  | SDK logger                                                                    |
+
+The browser entry has no Node.js runtime dependencies or polyfill requirements. It uses one endpoint per client. TLS is controlled by the URL and browser trust store. Client streaming, Arrow Flight bulk writes, gRPC compression, and Node.js channel options are not supported.
+
+Runnable example: [examples/09-browser](./examples/09-browser/). Start it with `pnpm example:browser`.
 
 ## Three write modes
 
@@ -199,7 +251,6 @@ const client = new Client(
 
 - Off-main-thread Arrow encoding (worker_threads pool) to close the TS↔Go throughput gap on wide-schema bulk — today `rowsToArrowTable` is ~99% of client CPU (see [docs/benchmarking.md](./docs/benchmarking.md))
 - OpenTelemetry instrumentation of the SDK itself (write latency, retries, bulk/stream state as metrics + spans)
-- Browser build via gRPC-Web in a separate `@greptime/ingester-web` package (unary + streaming only; no bulk)
 
 ## Links
 

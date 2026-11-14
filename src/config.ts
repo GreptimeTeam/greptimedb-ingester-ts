@@ -1,16 +1,10 @@
+import { DEFAULT_RETRY_POLICY, type AuthConfig, type RetryPolicy } from './config-shared.js';
 import { ConfigError } from './errors.js';
 import type { Logger } from './internal/logger.js';
 import { RandomSelector, type EndpointSelector } from './transport/endpoint-selector.js';
 import { VERSION } from './version.js';
 
-/**
- * Authentication for the ingest client. Only `basic` is supported right now.
- */
-export interface AuthConfig {
-  readonly kind: 'basic';
-  readonly username: string;
-  readonly password: string;
-}
+export { DEFAULT_RETRY_POLICY, type AuthConfig, type RetryPolicy } from './config-shared.js';
 
 export type TlsConfig =
   | { readonly kind: 'system' }
@@ -36,27 +30,6 @@ export interface KeepAliveConfig {
   readonly timeMs: number;
   readonly timeoutMs: number;
 }
-
-/**
- * Retry policy for writing.
- */
-export interface RetryPolicy {
-  readonly maxAttempts: number;
-  readonly initialBackoffMs: number;
-  readonly maxBackoffMs: number;
-  readonly backoffMultiplier: number;
-  readonly jitter: 'full' | 'none';
-  readonly mode: 'aggressive' | 'conservative';
-}
-
-export const DEFAULT_RETRY_POLICY: RetryPolicy = {
-  maxAttempts: 3,
-  initialBackoffMs: 100,
-  maxBackoffMs: 5_000,
-  backoffMultiplier: 2,
-  jitter: 'full',
-  mode: 'aggressive',
-};
 
 export type GrpcCompression = 'none' | 'gzip' | 'deflate';
 
